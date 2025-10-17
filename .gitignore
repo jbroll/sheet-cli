@@ -1,6 +1,4 @@
-# OAuth credentials and tokens
-credentials.json
-token.pickle
+# OAuth credentials now stored in ~/.sheet-cli/ (not in project root)
 
 # Python
 __pycache__/

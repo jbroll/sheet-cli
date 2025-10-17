@@ -19,42 +19,50 @@ Dependencies:
 1. Create OAuth 2.0 Client ID in [Google Cloud Console](https://console.cloud.google.com)
 2. Go to APIs & Services → Credentials
 3. Create Credentials → OAuth 2.0 Client ID → Desktop App
-4. Download as `credentials.json` in project root
+4. Download as `~/.sheet-cli/credentials.json`
 
-First run opens browser for authorization. Token cached to `token.pickle` and auto-refreshes.
+First run opens browser for authorization. Token cached to `~/.sheet-cli/token.pickle` and auto-refreshes.
+
+**Security**: Credentials stored in `~/.sheet-cli/` with secure permissions (directory: 700, files: 600).
 
 ## SheetsClient
 
 ### Constructor
 
 ```python
-from src import SheetsClient, CellData
+from sheet_client import SheetsClient, CellData
 
 client = SheetsClient(
-    spreadsheet_id: str,
-    credentials_path: str = 'credentials.json',
-    token_path: str = 'token.pickle'
+    credentials_path: str = None,  # Defaults to ~/.sheet-cli/credentials.json
+    token_path: str = None         # Defaults to ~/.sheet-cli/token.pickle
 )
 ```
 
 **Parameters:**
-- `spreadsheet_id` - Spreadsheet ID from URL (required)
-- `credentials_path` - Path to OAuth client credentials JSON
-- `token_path` - Path to save/load cached token
+- `credentials_path` - Path to OAuth client credentials JSON (defaults to `~/.sheet-cli/credentials.json`)
+- `token_path` - Path to save/load cached token (defaults to `~/.sheet-cli/token.pickle`)
 
 **Behavior:**
 - First run opens browser for OAuth authorization
 - Token cached and auto-refreshed
 - Raises `AuthenticationError` if OAuth fails
+- No default spreadsheet - specify per method call
 
 ## Core API - Four Methods
 
-The entire API consists of four methods:
+The entire API consists of four methods with perfect symmetry:
 
-1. **`read(ranges, types)`** - Read cells with type flags
-2. **`write(data)`** - Write values/format/notes
-3. **`metadata()`** - Get spreadsheet structure
-4. **`structure(requests)`** - Batch operations
+| Operation | Read | Write |
+|-----------|------|-------|
+| **Cell Data** | `read()` | `write()` |
+| **Metadata** | `meta_read()` | `meta_write()` |
+
+1. **`read(spreadsheet_id, ranges, types)`** - Read cell data
+2. **`write(spreadsheet_id, data)`** - Write cell data
+3. **`meta_read(spreadsheet_id)`** - Read metadata/structure
+4. **`meta_write(spreadsheet_id, requests)`** - Write metadata/structure
+
+All methods require `spreadsheet_id` as the first parameter.
 
 ## CellData Flags
 
@@ -83,6 +91,7 @@ Read cells from specified ranges.
 
 ```python
 def read(
+    spreadsheet_id: str,
     ranges: List[str],
     types: int = CellData.VALUE
 ) -> dict
@@ -90,6 +99,7 @@ def read(
 
 **Parameters:**
 
+- `spreadsheet_id` - Spreadsheet ID (required)
 - `ranges` - List of A1 notation ranges
   - `['Sheet1!A1:C10']` - Single range
   - `['Sheet1!A1:C10', 'Sheet2!B2:D5']` - Multiple ranges
@@ -131,23 +141,25 @@ With `FORMAT` or `NOTE` flags, returns grid data with full cell properties.
 
 ```python
 # Read values only (fastest)
-data = client.read(['Sheet1!A1:C10'])
+data = client.read('spreadsheet-id', ['Sheet1!A1:C10'])
 values = data.get('values', [])
 
 # Read values and formulas
 data = client.read(
+    'spreadsheet-id',
     ['Sheet1!A1:C10'],
     types=CellData.VALUE | CellData.FORMULA
 )
 
 # Read everything
 data = client.read(
+    'spreadsheet-id',
     ['Sheet1!A1:C10'],
     types=CellData.VALUE | CellData.FORMULA | CellData.FORMAT | CellData.NOTE
 )
 
 # Read multiple ranges
-data = client.read([
+data = client.read('spreadsheet-id', [
     'Sheet1!A1:C10',
     'Sheet2!B2:D5',
     'Summary!A1'
@@ -157,10 +169,10 @@ for value_range in data['valueRanges']:
     print(f"Values: {value_range.get('values', [])}")
 
 # Read entire column
-data = client.read(['Sheet1!A:A'])
+data = client.read('spreadsheet-id', ['Sheet1!A:A'])
 
 # Read entire row
-data = client.read(['Sheet1!1:1'])
+data = client.read('spreadsheet-id', ['Sheet1!1:1'])
 ```
 
 **Notes:**
@@ -175,11 +187,12 @@ data = client.read(['Sheet1!1:1'])
 Write values, formatting, or notes to cells.
 
 ```python
-def write(data: List[dict]) -> dict
+def write(spreadsheet_id: str, data: List[dict]) -> dict
 ```
 
 **Parameters:**
 
+- `spreadsheet_id` - Spreadsheet ID (required)
 - `data` - List of write operations
 
 Each dict can have:
@@ -210,32 +223,32 @@ Each dict can have:
 
 ```python
 # Write values
-client.write([{
+client.write('spreadsheet-id', [{
     'range': 'Sheet1!A1',
     'values': [[1, 2, 3], [4, 5, 6]]
 }])
 
 # Write formulas (parsed automatically)
-client.write([{
+client.write('spreadsheet-id', [{
     'range': 'Sheet1!D1',
     'values': [['=SUM(A1:C1)'], ['=SUM(A2:C2)']]
 }])
 
 # Write headers and data in one call
-client.write([
+client.write('spreadsheet-id', [
     {'range': 'Sheet1!A1', 'values': [['Name', 'Age', 'Email']]},
     {'range': 'Sheet1!A2', 'values': [['Alice', 30, 'alice@example.com']]}
 ])
 
 # Batch write multiple ranges
-client.write([
+client.write('spreadsheet-id', [
     {'range': 'Sheet1!A1', 'values': [[1, 2, 3]]},
     {'range': 'Sheet2!B5', 'values': [[4, 5, 6]]},
     {'range': 'Sheet3!C10', 'values': [[7, 8, 9]]}
 ])
 
 # Clear values
-client.write([{
+client.write('spreadsheet-id', [{
     'range': 'Sheet1!A1:C10',
     'values': [[]]
 }])
@@ -247,32 +260,33 @@ No special append mode. To append, find last row then write:
 
 ```python
 # Read to find last row
-data = client.read(['Sheet1!A:A'])
+data = client.read('spreadsheet-id', ['Sheet1!A:A'])
 values = data.get('values', [])
 last_row = len(values)
 
 # Write to next row
-client.write([{
+client.write('spreadsheet-id', [{
     'range': f'Sheet1!A{last_row + 1}',
     'values': [[new_data]]
 }])
 ```
 
 **Notes:**
-- Format and note writes not yet implemented (use `structure()` for formatting)
+- Format and note writes not yet implemented (use `meta_write()` for formatting)
 - All value writes use USER_ENTERED input mode
 - Formulas must start with `=`
 - Empty arrays clear values
 
-## Method 3: metadata()
+## Method 3: meta_read()
 
-Get spreadsheet metadata without cell data.
+Read spreadsheet metadata and structure without cell data.
 
 ```python
-def metadata() -> dict
+def meta_read(spreadsheet_id: str) -> dict
 ```
 
-**Parameters:** None
+**Parameters:**
+- `spreadsheet_id` - Spreadsheet ID (required)
 
 **Returns:**
 
@@ -316,14 +330,14 @@ def metadata() -> dict
 
 ```python
 # Get all sheets
-meta = client.metadata()
+meta = client.meta_read('spreadsheet-id')
 for sheet in meta['sheets']:
     print(f"Sheet: {sheet['properties']['title']}")
     print(f"  ID: {sheet['properties']['sheetId']}")
     print(f"  Size: {sheet['properties']['gridProperties']}")
 
 # Find sheet ID by name
-meta = client.metadata()
+meta = client.meta_read('spreadsheet-id')
 sheet_id = next(
     s['properties']['sheetId']
     for s in meta['sheets']
@@ -331,31 +345,32 @@ sheet_id = next(
 )
 
 # List named ranges
-meta = client.metadata()
+meta = client.meta_read('spreadsheet-id')
 for nr in meta.get('namedRanges', []):
     print(f"{nr['name']}: {nr['range']}")
 
 # Check grid properties
-meta = client.metadata()
+meta = client.meta_read('spreadsheet-id')
 grid = meta['sheets'][0]['properties']['gridProperties']
 print(f"Rows: {grid['rowCount']}, Columns: {grid['columnCount']}")
 ```
 
 **Notes:**
-- Call this before `structure()` operations to get sheet IDs
+- Call this before `meta_write()` operations to get sheet IDs
 - Fast operation - does not include cell data
 - Returns complete spreadsheet structure
 
-## Method 4: structure()
+## Method 4: meta_write()
 
-Modify spreadsheet structure and metadata using batch operations.
+Write/modify spreadsheet metadata and structure using batch operations.
 
 ```python
-def structure(requests: List[dict]) -> dict
+def meta_write(spreadsheet_id: str, requests: List[dict]) -> dict
 ```
 
 **Parameters:**
 
+- `spreadsheet_id` - Spreadsheet ID (required)
 - `requests` - List of request dicts (max 500 per call)
 
 **Returns:**
@@ -403,7 +418,7 @@ Full list: [Google Sheets API Request Types](https://developers.google.com/sheet
 ### Create New Sheet
 
 ```python
-client.structure([{
+client.meta_write('spreadsheet-id', [{
     'addSheet': {
         'properties': {
             'title': 'Sales Data',
@@ -420,10 +435,10 @@ client.structure([{
 
 ```python
 # Get sheet ID first
-meta = client.metadata()
+meta = client.meta_read('spreadsheet-id')
 sheet_id = meta['sheets'][0]['properties']['sheetId']
 
-client.structure([{
+client.meta_write('spreadsheet-id', [{
     'updateSheetProperties': {
         'properties': {
             'sheetId': sheet_id,
@@ -437,7 +452,7 @@ client.structure([{
 ### Format Header Row
 
 ```python
-client.structure([{
+client.meta_write('spreadsheet-id', [{
     'repeatCell': {
         'range': {
             'sheetId': sheet_id,
@@ -458,7 +473,7 @@ client.structure([{
 ### Auto-Resize Columns
 
 ```python
-client.structure([{
+client.meta_write('spreadsheet-id', [{
     'autoResizeDimensions': {
         'dimensions': {
             'sheetId': sheet_id,
@@ -473,7 +488,7 @@ client.structure([{
 ### Add Borders
 
 ```python
-client.structure([{
+client.meta_write('spreadsheet-id', [{
     'updateBorders': {
         'range': {
             'sheetId': sheet_id,
@@ -495,7 +510,7 @@ client.structure([{
 ### Conditional Formatting
 
 ```python
-client.structure([{
+client.meta_write('spreadsheet-id', [{
     'addConditionalFormatRule': {
         'rule': {
             'ranges': [{
@@ -524,7 +539,7 @@ client.structure([{
 
 ```python
 # Combine multiple operations in one call
-client.structure([
+client.meta_write('spreadsheet-id', [
     # Create sheet
     {'addSheet': {'properties': {'title': 'Dashboard'}}},
 
@@ -556,7 +571,7 @@ client.structure([
 **Notes:**
 - Maximum 500 requests per call
 - Operations execute in order
-- Get sheet IDs from `metadata()` first
+- Get sheet IDs from `meta_read()` first
 - Use `fields` parameter to specify what to update
 - `replies` array contains results for each request
 
@@ -567,7 +582,7 @@ client.structure([
 Convert column letter(s) to zero-based index.
 
 ```python
-from src import column_to_index
+from sheet_client import column_to_index
 
 column_to_index('A')    # 0
 column_to_index('B')    # 1
@@ -581,7 +596,7 @@ column_to_index('AB')   # 27
 Convert zero-based index to column letter(s).
 
 ```python
-from src import index_to_column
+from sheet_client import index_to_column
 
 index_to_column(0)    # 'A'
 index_to_column(1)    # 'B'
@@ -595,7 +610,7 @@ index_to_column(27)   # 'AB'
 Convert A1 notation to GridRange format for batch operations.
 
 ```python
-from src import a1_to_grid_range
+from sheet_client import a1_to_grid_range
 
 result = a1_to_grid_range('A1:C10', sheet_id=0)
 # Returns:
@@ -703,7 +718,7 @@ Common types: `NUMBER`, `CURRENCY`, `PERCENT`, `DATE`, `TIME`, `DATE_TIME`
 ### Exceptions
 
 ```python
-from src import (
+from sheet_client import (
     SheetsAPIError,
     AuthenticationError,
     RateLimitError,
@@ -763,23 +778,23 @@ Google Sheets API v4 limits:
 - Use batch operations to minimize API calls
 - Each batch operation counts as 1 API call
 - Multiple ranges in `read()` counts as 1 call
-- Multiple operations in `structure()` counts as 1 call
+- Multiple operations in `meta_write()` counts as 1 call
 
 ## Complete Examples
 
 ### Example 1: Read and Analyze
 
 ```python
-from src import SheetsClient, CellData
+from sheet_client import SheetsClient, CellData
 
-client = SheetsClient('your-spreadsheet-id')
+client = SheetsClient()
 
 # Get structure
-meta = client.metadata()
+meta = client.meta_read('your-spreadsheet-id')
 print(f"Sheets: {[s['properties']['title'] for s in meta['sheets']]}")
 
 # Read values
-data = client.read(['Sheet1!A1:C10'])
+data = client.read('your-spreadsheet-id', ['Sheet1!A1:C10'])
 values = data.get('values', [])
 for row in values:
     print(row)
@@ -789,11 +804,11 @@ for row in values:
 
 ```python
 # Get sheet ID
-meta = client.metadata()
+meta = client.meta_read('your-spreadsheet-id')
 sheet_id = meta['sheets'][0]['properties']['sheetId']
 
 # Write data
-client.write([
+client.write('your-spreadsheet-id', [
     {'range': 'Sheet1!A1', 'values': [['Name', 'Department', 'Salary']]},
     {'range': 'Sheet1!A2', 'values': [
         ['Alice', 'Engineering', 120000],
@@ -803,7 +818,7 @@ client.write([
 ])
 
 # Format
-client.structure([
+client.meta_write('your-spreadsheet-id', [
     # Header format
     {
         'repeatCell': {
@@ -843,7 +858,7 @@ client.structure([
 
 ```python
 # Read with grid data
-data = client.read(['Sheet1!A1:Z100'], types=CellData.VALUE | CellData.FORMAT)
+data = client.read('your-spreadsheet-id', ['Sheet1!A1:Z100'], types=CellData.VALUE | CellData.FORMAT)
 
 if 'sheets' in data:
     for sheet in data['sheets']:

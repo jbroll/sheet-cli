@@ -14,10 +14,25 @@ def cmd_read(args):
 
     Outputs cell/value pairs to stdout.
     """
-    client = SheetsClient(args.spreadsheet_id)
+    client = SheetsClient()
+
+    # If no ranges specified, read all sheets
+    if not args.ranges:
+        # Get metadata to discover all sheets
+        metadata = client.meta_read(args.spreadsheet_id)
+
+        # Build list of sheet names to read
+        sheet_names = [sheet['properties']['title'] for sheet in metadata.get('sheets', [])]
+
+        if not sheet_names:
+            print("No sheets found in spreadsheet", file=sys.stderr)
+            sys.exit(1)
+
+        # Use sheet names as ranges (reads all data from each sheet)
+        args.ranges = sheet_names
 
     # Read all ranges
-    response = client.read(args.ranges, types=CellData.VALUE | CellData.FORMULA)
+    response = client.read(args.spreadsheet_id, args.ranges, types=CellData.VALUE | CellData.FORMULA)
 
     # Extract values from response
     result = {}
@@ -48,7 +63,7 @@ def cmd_write(args):
     From command line: alternating cell/range and value pairs.
     From stdin: space-delimited or JSON format.
     """
-    client = SheetsClient(args.spreadsheet_id)
+    client = SheetsClient()
 
     # Check if we have command line cell/value pairs
     if args.cell_value_pairs:
@@ -93,7 +108,7 @@ def cmd_write(args):
                 })
 
     # Execute write
-    result = client.write(write_ops)
+    result = client.write(args.spreadsheet_id, write_ops)
 
     # Output result summary
     if 'totalUpdatedCells' in result:
@@ -105,7 +120,7 @@ def cmd_structure(args):
 
     Reads raw batch request JSON from stdin.
     """
-    client = SheetsClient(args.spreadsheet_id)
+    client = SheetsClient()
 
     # Read JSON from stdin
     input_text = formats.read_stdin()
@@ -130,7 +145,7 @@ def cmd_structure(args):
         sys.exit(1)
 
     # Execute structure operations
-    result = client.structure(requests)
+    result = client.meta_write(args.spreadsheet_id, requests)
 
     # Output result as JSON
     print(json.dumps(result, indent=2))
@@ -141,18 +156,22 @@ def cmd_metadata(args):
 
     Outputs metadata as JSON.
     """
-    client = SheetsClient(args.spreadsheet_id)
-    result = client.metadata()
+    client = SheetsClient()
+    result = client.meta_read(args.spreadsheet_id)
     print(json.dumps(result, indent=2))
 
 
 def main():
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
+        prog='sheet-cli',
         description='Google Sheets CLI - minimal wrapper for Sheets API v4',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
+  # Read entire spreadsheet (all sheets)
+  sheet-cli read SHEET_ID
+
   # Read multiple cells/ranges
   sheet-cli read SHEET_ID A1 A2 B1:B10 Sheet2!C1:C5
 
@@ -167,11 +186,11 @@ Examples:
   # Write cells from stdin (JSON)
   echo '{"A1": "hello", "A2": 123}' | sheet-cli write SHEET_ID
 
-  # Structure operations (batch API)
-  echo '{"requests": [...]}' | sheet-cli structure SHEET_ID
+  # Write metadata (batch API structure operations)
+  echo '{"requests": [...]}' | sheet-cli meta_write SHEET_ID
 
-  # Get metadata
-  sheet-cli metadata SHEET_ID
+  # Read metadata
+  sheet-cli meta_read SHEET_ID
 """
     )
 
@@ -181,7 +200,7 @@ Examples:
     # Read command
     parser_read = subparsers.add_parser('read', help='Read cell values')
     parser_read.add_argument('spreadsheet_id', help='Spreadsheet ID')
-    parser_read.add_argument('ranges', nargs='+', help='Cell or range (A1, A1:B10, Sheet1!A1)')
+    parser_read.add_argument('ranges', nargs='*', help='Cell or range (A1, A1:B10, Sheet1!A1). If omitted, reads all sheets.')
     parser_read.set_defaults(func=cmd_read)
 
     # Write command
@@ -190,15 +209,15 @@ Examples:
     parser_write.add_argument('cell_value_pairs', nargs='*', help='Alternating cell/range and value pairs')
     parser_write.set_defaults(func=cmd_write)
 
-    # Structure command
-    parser_structure = subparsers.add_parser('structure', help='Structure operations (batch API) from JSON stdin')
-    parser_structure.add_argument('spreadsheet_id', help='Spreadsheet ID')
-    parser_structure.set_defaults(func=cmd_structure)
+    # meta_write command (was: structure)
+    parser_meta_write = subparsers.add_parser('meta_write', help='Write metadata (batch API structure operations) from JSON stdin')
+    parser_meta_write.add_argument('spreadsheet_id', help='Spreadsheet ID')
+    parser_meta_write.set_defaults(func=cmd_structure)
 
-    # Metadata command
-    parser_metadata = subparsers.add_parser('metadata', help='Get spreadsheet metadata')
-    parser_metadata.add_argument('spreadsheet_id', help='Spreadsheet ID')
-    parser_metadata.set_defaults(func=cmd_metadata)
+    # meta_read command (was: metadata)
+    parser_meta_read = subparsers.add_parser('meta_read', help='Read spreadsheet metadata')
+    parser_meta_read.add_argument('spreadsheet_id', help='Spreadsheet ID')
+    parser_meta_read.set_defaults(func=cmd_metadata)
 
     # Parse args and execute
     args = parser.parse_args()

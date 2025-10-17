@@ -2,6 +2,7 @@
 
 import os
 import pickle
+from pathlib import Path
 from typing import Optional
 
 from google.auth.transport.requests import Request
@@ -14,14 +15,19 @@ from .exceptions import AuthenticationError
 # Scopes required for Google Sheets API
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 
+# Default credentials directory
+DEFAULT_CREDS_DIR = Path.home() / '.sheet-cli'
 
-def get_credentials(credentials_path: str = 'credentials.json',
-                   token_path: str = 'token.pickle') -> Credentials:
+
+def get_credentials(credentials_path: str = None,
+                   token_path: str = None) -> Credentials:
     """Get OAuth 2.0 credentials, prompting user if needed.
 
     Args:
         credentials_path: Path to OAuth client credentials JSON file
+                         (defaults to ~/.sheet-cli/credentials.json)
         token_path: Path to cached token pickle file
+                   (defaults to ~/.sheet-cli/token.pickle)
 
     Returns:
         Valid Credentials object
@@ -29,6 +35,15 @@ def get_credentials(credentials_path: str = 'credentials.json',
     Raises:
         AuthenticationError: If authentication fails
     """
+    # Use default paths if not specified
+    if credentials_path is None:
+        credentials_path = str(DEFAULT_CREDS_DIR / 'credentials.json')
+    if token_path is None:
+        token_path = str(DEFAULT_CREDS_DIR / 'token.pickle')
+
+    # Ensure credentials directory exists
+    DEFAULT_CREDS_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+
     creds: Optional[Credentials] = None
 
     # Try to load cached token
@@ -66,6 +81,8 @@ def get_credentials(credentials_path: str = 'credentials.json',
         try:
             with open(token_path, 'wb') as token:
                 pickle.dump(creds, token)
+            # Set secure permissions (read/write for user only)
+            os.chmod(token_path, 0o600)
         except Exception as e:
             raise AuthenticationError(f"Failed to save token to {token_path}: {e}")
 

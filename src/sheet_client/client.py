@@ -23,25 +23,50 @@ class SheetsClient:
     """Minimal wrapper for Google Sheets REST API v4.
 
     Provides four core operations:
-    1. read() - Read cells with type flags
-    2. write() - Write values/format/notes
-    3. metadata() - Get spreadsheet structure
-    4. structure() - Batch operations
+    1. read() - Read cell data
+    2. write() - Write cell data
+    3. meta_read() - Read spreadsheet metadata/structure
+    4. meta_write() - Modify spreadsheet metadata/structure
 
     Args:
         spreadsheet_id: The ID of the Google Spreadsheet
-        credentials_path: Path to OAuth client credentials JSON (default: 'credentials.json')
-        token_path: Path to cached token file (default: 'token.pickle')
+        credentials_path: Path to OAuth client credentials JSON
+                         (defaults to ~/.sheet-cli/credentials.json)
+        token_path: Path to cached token file
+                   (defaults to ~/.sheet-cli/token.pickle)
     """
 
-    def __init__(self, spreadsheet_id: str,
-                 credentials_path: str = 'credentials.json',
-                 token_path: str = 'token.pickle'):
-        """Initialize the Sheets client with OAuth credentials."""
-        self.spreadsheet_id = spreadsheet_id
+    def __init__(self, credentials_path: str = None,
+                 token_path: str = None):
+        """Initialize the Sheets client with OAuth credentials.
+
+        Args:
+            credentials_path: Path to OAuth client credentials JSON
+                             (defaults to ~/.sheet-cli/credentials.json)
+            token_path: Path to cached token file
+                       (defaults to ~/.sheet-cli/token.pickle)
+        """
         creds = get_credentials(credentials_path, token_path)
         self.service = build('sheets', 'v4', credentials=creds)
         self.spreadsheets = self.service.spreadsheets()
+
+    def _get_spreadsheet_id(self, spreadsheet_id: str) -> str:
+        """Validate and return spreadsheet ID.
+
+        Args:
+            spreadsheet_id: Spreadsheet ID (required)
+
+        Returns:
+            Spreadsheet ID to use
+
+        Raises:
+            ValueError: If spreadsheet_id is None or empty
+        """
+        if not spreadsheet_id:
+            raise ValueError(
+                "spreadsheet_id is required. Pass spreadsheet_id parameter to method."
+            )
+        return spreadsheet_id
 
     def _execute_with_retry(self, request, max_retries: int = 3) -> Any:
         """Execute API request with exponential backoff for rate limits and server errors.
@@ -98,10 +123,12 @@ class SheetsClient:
 
         raise SheetsAPIError("Unexpected error in retry logic")
 
-    def read(self, ranges: List[str], types: int = CellData.VALUE) -> dict:
+    def read(self, spreadsheet_id: str, ranges: List[str],
+             types: int = CellData.VALUE) -> dict:
         """Read cells from specified ranges.
 
         Args:
+            spreadsheet_id: Spreadsheet ID (required)
             ranges: List of A1 notation ranges
                 ['Sheet1!A1:C10']
                 ['Sheet1!A1:C10', 'Sheet2!B2:D5']
@@ -141,34 +168,38 @@ class SheetsClient:
 
         Examples:
             # Read values only (fastest)
-            data = client.read(['Sheet1!A1:C10'])
+            data = client.read('spreadsheet-id', ['Sheet1!A1:C10'])
 
             # Read values and formulas
             data = client.read(
+                'spreadsheet-id',
                 ['Sheet1!A1:C10'],
                 types=CellData.VALUE | CellData.FORMULA
             )
 
             # Read everything
             data = client.read(
+                'spreadsheet-id',
                 ['Sheet1!A1:C10'],
                 types=CellData.VALUE | CellData.FORMULA | CellData.FORMAT | CellData.NOTE
             )
 
             # Read multiple ranges
-            data = client.read([
-                'Sheet1!A1:C10',
-                'Sheet2!B2:D5',
-                'Summary!A1'
-            ])
+            data = client.read(
+                'spreadsheet-id',
+                ['Sheet1!A1:C10', 'Sheet2!B2:D5', 'Summary!A1']
+            )
         """
+        # Get spreadsheet ID
+        sheet_id = self._get_spreadsheet_id(spreadsheet_id)
+
         # Check if we need grid data (for FORMAT or NOTE)
         need_grid_data = bool(types & (CellData.FORMAT | CellData.NOTE))
 
         if need_grid_data:
             # Use spreadsheets.get for full cell data
             request = self.spreadsheets.get(
-                spreadsheetId=self.spreadsheet_id,
+                spreadsheetId=sheet_id,
                 includeGridData=True,
                 ranges=ranges
             )
@@ -180,24 +211,25 @@ class SheetsClient:
             if len(ranges) == 1:
                 # Single range - use values.get
                 request = self.spreadsheets.values().get(
-                    spreadsheetId=self.spreadsheet_id,
+                    spreadsheetId=sheet_id,
                     range=ranges[0],
                     valueRenderOption=value_render
                 )
             else:
                 # Multiple ranges - use values.batchGet
                 request = self.spreadsheets.values().batchGet(
-                    spreadsheetId=self.spreadsheet_id,
+                    spreadsheetId=sheet_id,
                     ranges=ranges,
                     valueRenderOption=value_render
                 )
 
             return self._execute_with_retry(request)
 
-    def write(self, data: List[dict]) -> dict:
+    def write(self, spreadsheet_id: str, data: List[dict]) -> dict:
         """Write to cells.
 
         Args:
+            spreadsheet_id: Spreadsheet ID (required)
             data: List of write operations
                 [
                     {'range': 'Sheet1!A1', 'values': [[1, 2, 3], [4, 5, 6]]},
@@ -228,19 +260,19 @@ class SheetsClient:
 
         Examples:
             # Write values
-            client.write([{
+            client.write('spreadsheet-id', [{
                 'range': 'Sheet1!A1',
                 'values': [[1, 2, 3], [4, 5, 6]]
             }])
 
             # Write formulas
-            client.write([{
+            client.write('spreadsheet-id', [{
                 'range': 'Sheet1!D1',
                 'values': [['=SUM(A1:C1)'], ['=SUM(A2:C2)']]
             }])
 
             # Write values and format together
-            client.write([
+            client.write('spreadsheet-id', [
                 {'range': 'Sheet1!A1', 'values': [['Total']]},
                 {'range': 'Sheet1!A1', 'format': {
                     'backgroundColor': {'red': 0.9, 'green': 0.9, 'blue': 0.9},
@@ -249,18 +281,21 @@ class SheetsClient:
             ])
 
             # Write note
-            client.write([{
+            client.write('spreadsheet-id', [{
                 'range': 'Sheet1!A1',
                 'note': 'Important cell!'
             }])
 
             # Batch write multiple ranges
-            client.write([
+            client.write('spreadsheet-id', [
                 {'range': 'Sheet1!A1', 'values': [[1, 2, 3]]},
                 {'range': 'Sheet2!B5', 'values': [[4, 5, 6]]},
                 {'range': 'Sheet3!C10', 'values': [[7, 8, 9]]}
             ])
         """
+        # Get spreadsheet ID
+        sheet_id = self._get_spreadsheet_id(spreadsheet_id)
+
         # Separate value writes from format/note writes
         value_writes = [d for d in data if 'values' in d]
         other_writes = [d for d in data if 'format' in d or 'note' in d]
@@ -275,7 +310,7 @@ class SheetsClient:
                 'data': value_data
             }
             request = self.spreadsheets.values().batchUpdate(
-                spreadsheetId=self.spreadsheet_id,
+                spreadsheetId=sheet_id,
                 body=body
             )
             results['values'] = self._execute_with_retry(request)
@@ -288,10 +323,13 @@ class SheetsClient:
 
         return results.get('values', {})
 
-    def metadata(self) -> dict:
-        """Get spreadsheet metadata.
+    def meta_read(self, spreadsheet_id: str) -> dict:
+        """Read spreadsheet metadata and structure.
 
         Read-only view of spreadsheet structure without cell data.
+
+        Args:
+            spreadsheet_id: Spreadsheet ID (required)
 
         Returns:
             Raw API response dict with:
@@ -323,13 +361,13 @@ class SheetsClient:
 
         Examples:
             # Get all sheets
-            meta = client.metadata()
+            meta = client.meta_read('spreadsheet-id')
             for sheet in meta['sheets']:
                 print(f"Sheet: {sheet['properties']['title']}")
                 print(f"  ID: {sheet['properties']['sheetId']}")
 
             # Find sheet ID by name
-            meta = client.metadata()
+            meta = client.meta_read('spreadsheet-id')
             sheet_id = next(
                 s['properties']['sheetId']
                 for s in meta['sheets']
@@ -337,23 +375,27 @@ class SheetsClient:
             )
 
             # List named ranges
-            meta = client.metadata()
+            meta = client.meta_read('spreadsheet-id')
             for nr in meta.get('namedRanges', []):
                 print(f"{nr['name']}: {nr['range']}")
         """
+        # Get spreadsheet ID
+        sheet_id = self._get_spreadsheet_id(spreadsheet_id)
+
         request = self.spreadsheets.get(
-            spreadsheetId=self.spreadsheet_id,
+            spreadsheetId=sheet_id,
             includeGridData=False
         )
         return self._execute_with_retry(request)
 
-    def structure(self, requests: List[dict]) -> dict:
-        """Modify spreadsheet structure and metadata.
+    def meta_write(self, spreadsheet_id: str, requests: List[dict]) -> dict:
+        """Write/modify spreadsheet metadata and structure.
 
         Direct access to spreadsheets.batchUpdate API.
         Performs structural operations (not cell value writes).
 
         Args:
+            spreadsheet_id: Spreadsheet ID (required)
             requests: List of request dicts (max 500 per call)
 
         Returns:
@@ -405,7 +447,7 @@ class SheetsClient:
 
         Examples:
             # Add new sheet
-            client.structure([{
+            client.meta_write('spreadsheet-id', [{
                 'addSheet': {
                     'properties': {
                         'title': 'Sales Data',
@@ -418,8 +460,8 @@ class SheetsClient:
             }])
 
             # Freeze top row
-            sheet_id = 0  # From metadata()
-            client.structure([{
+            sheet_id = 0  # From meta_read()
+            client.meta_write('spreadsheet-id', [{
                 'updateSheetProperties': {
                     'properties': {
                         'sheetId': sheet_id,
@@ -432,7 +474,7 @@ class SheetsClient:
             }])
 
             # Format header row
-            client.structure([{
+            client.meta_write('spreadsheet-id', [{
                 'repeatCell': {
                     'range': {
                         'sheetId': sheet_id,
@@ -450,15 +492,18 @@ class SheetsClient:
             }])
 
             # Batch multiple operations
-            client.structure([
+            client.meta_write('spreadsheet-id', [
                 {'addSheet': {'properties': {'title': 'Dashboard'}}},
                 {'updateSheetProperties': {...}},
                 {'autoResizeDimensions': {...}}
             ])
         """
+        # Get spreadsheet ID
+        sheet_id = self._get_spreadsheet_id(spreadsheet_id)
+
         body = {'requests': requests}
         request = self.spreadsheets.batchUpdate(
-            spreadsheetId=self.spreadsheet_id,
+            spreadsheetId=sheet_id,
             body=body
         )
         return self._execute_with_retry(request)

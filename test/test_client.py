@@ -1,10 +1,11 @@
 """Unit tests for Google Sheets CLI."""
 
 import sys
-sys.path.insert(0, '../src')
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 import pytest
-from src.utils import column_to_index, index_to_column, a1_to_grid_range
+from sheet_client.utils import column_to_index, index_to_column, a1_to_grid_range
 
 
 class TestColumnConversion:
@@ -124,7 +125,7 @@ class TestExceptions:
 
     def test_sheets_api_error_with_status(self):
         """Test SheetsAPIError with status code."""
-        from src.exceptions import SheetsAPIError
+        from sheet_client.exceptions import SheetsAPIError
 
         error = SheetsAPIError("Test error", status_code=400, response={'error': 'details'})
         assert str(error) == "Test error"
@@ -133,14 +134,14 @@ class TestExceptions:
 
     def test_authentication_error(self):
         """Test AuthenticationError."""
-        from src.exceptions import AuthenticationError
+        from sheet_client.exceptions import AuthenticationError
 
         error = AuthenticationError("Auth failed")
         assert str(error) == "Auth failed"
 
     def test_rate_limit_error(self):
         """Test RateLimitError."""
-        from src.exceptions import RateLimitError
+        from sheet_client.exceptions import RateLimitError
 
         error = RateLimitError("Rate limit exceeded", status_code=429)
         assert str(error) == "Rate limit exceeded"

@@ -78,8 +78,18 @@ def expand_range_to_cells(range_str: str, values: List[List[Any]]) -> Dict[str, 
     """
     from sheet_client.utils import a1_to_grid_range, index_to_column
 
+    # Normalize single cell references (A1 -> A1:A1)
+    # Google Sheets API returns single cells without the colon
+    normalized_range = range_str
+    if '!' in range_str:
+        sheet_name, cell_part = range_str.split('!', 1)
+        if ':' not in cell_part:
+            normalized_range = f"{sheet_name}!{cell_part}:{cell_part}"
+    elif ':' not in range_str:
+        normalized_range = f"{range_str}:{range_str}"
+
     # Parse the range
-    grid_range = a1_to_grid_range(range_str)
+    grid_range = a1_to_grid_range(normalized_range)
 
     # Extract sheet name if present
     sheet_prefix = ""

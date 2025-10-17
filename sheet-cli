@@ -1,0 +1,11 @@
+#!/bin/sh
+#
+
+SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
+
+cd "$SCRIPT_DIR"
+. ./venv/bin/activate
+
+# Run as module from project root
+cd "$SCRIPT_DIR"
+python -m sheet_cli "$@"

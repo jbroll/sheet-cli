@@ -2,6 +2,8 @@
 
 Minimal Python wrapper for Google Sheets REST API v4. Provides direct access to the Google Sheets API with OAuth 2.0 authentication.
 
+**MCP Server Available**: A Model Context Protocol (MCP) server is included for use with Claude Desktop and other MCP clients. See [mcp-server/README.md](mcp-server/README.md) for details.
+
 ## Description
 
 This package wraps the Google Sheets API v4 with minimal abstraction. All methods return raw Google API responses. The implementation consists of approximately 300 lines of Python code providing authenticated access to discovery, read, write, and batch operations.
@@ -22,15 +24,6 @@ The design provides no higher-level abstractions, helper functions, or opinionat
 - Write: Value write and append operations
 - Batch: Direct access to `batch_update()` for structural/formatting operations
 - Authentication: OAuth flow with token persistence
-
-**What this does not provide:**
-- No table creation helpers
-- No theme system
-- No formula parsing
-- No structural analysis
-- No template system
-- No data transformation
-- No validation logic
 
 ## Requirements
 
@@ -57,7 +50,7 @@ Set up OAuth credentials:
 1. Create project in [Google Cloud Console](https://console.cloud.google.com)
 2. Enable Google Sheets API
 3. Create OAuth 2.0 Client ID (Desktop application type)
-4. Download credentials as `credentials.json` in project root
+4. Download credentials as `~/.sheet-cli/credentials.json`
 
 ## Authentication
 
@@ -65,7 +58,9 @@ First run initiates OAuth flow:
 ```bash
 python your_script.py
 ```
-Browser opens for user authorization. Token cached to `token.pickle` for subsequent runs. Token auto-refreshes when expired.
+Browser opens for user authorization. Token cached to `~/.sheet-cli/token.pickle` for subsequent runs. Token auto-refreshes when expired.
+
+**Credential Storage**: All credentials are stored in `~/.sheet-cli/` with secure permissions (directory: 700, files: 600).
 
 ## Usage
 

@@ -20,17 +20,19 @@ The CLI provides four commands that map directly to the library API:
 ```bash
 sheet-cli read       # Read cell values
 sheet-cli write      # Write cell values
-sheet-cli structure  # Batch structure operations
-sheet-cli metadata   # Get spreadsheet metadata
+sheet-cli meta_write  # Batch structure operations
+sheet-cli meta_read   # Get spreadsheet metadata
 ```
 
 ## Authentication
 
-First run initiates OAuth flow. Browser opens for authorization. Token cached to `token.pickle` for subsequent runs.
+First run initiates OAuth flow. Browser opens for authorization. Token cached to `~/.sheet-cli/token.pickle` for subsequent runs.
 
-Required files:
-- `credentials.json` - OAuth 2.0 Client ID from Google Cloud Console
-- `token.pickle` - Auto-generated after first auth
+Required files (stored in `~/.sheet-cli/`):
+- `~/.sheet-cli/credentials.json` - OAuth 2.0 Client ID from Google Cloud Console
+- `~/.sheet-cli/token.pickle` - Auto-generated after first auth
+
+**Security**: Credentials stored with secure permissions (directory: 700, files: 600)
 
 ## Data Formats
 
@@ -269,8 +271,8 @@ Execute batch structure operations from JSON stdin.
 ### Syntax
 
 ```bash
-sheet-cli structure SPREADSHEET_ID < requests.json
-echo '{"requests": [...]}' | sheet-cli structure SPREADSHEET_ID
+sheet-cli meta_write SPREADSHEET_ID < requests.json
+echo '{"requests": [...]}' | sheet-cli meta_write SPREADSHEET_ID
 ```
 
 ### Arguments
@@ -319,7 +321,7 @@ echo '{
       }
     }
   }]
-}' | sheet-cli structure SHEET_ID
+}' | sheet-cli meta_write SHEET_ID
 ```
 
 **Freeze header row:**
@@ -336,7 +338,7 @@ echo '{
       "fields": "gridProperties.frozenRowCount"
     }
   }]
-}' | sheet-cli structure SHEET_ID
+}' | sheet-cli meta_write SHEET_ID
 ```
 
 **Format header:**
@@ -358,12 +360,12 @@ echo '{
       "fields": "userEnteredFormat(backgroundColor,textFormat)"
     }
   }]
-}' | sheet-cli structure SHEET_ID
+}' | sheet-cli meta_write SHEET_ID
 ```
 
 **Multiple operations:**
 ```bash
-cat << 'EOF' | sheet-cli structure SHEET_ID
+cat << 'EOF' | sheet-cli meta_write SHEET_ID
 {
   "requests": [
     {"addSheet": {"properties": {"title": "Dashboard"}}},
@@ -404,7 +406,7 @@ Get spreadsheet metadata and structure.
 ### Syntax
 
 ```bash
-sheet-cli metadata SPREADSHEET_ID
+sheet-cli meta_read SPREADSHEET_ID
 ```
 
 ### Arguments
@@ -444,27 +446,27 @@ Complete metadata as JSON to stdout:
 
 **Get all metadata:**
 ```bash
-sheet-cli metadata 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms
+sheet-cli meta_read 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms
 ```
 
 **Extract sheet names:**
 ```bash
-sheet-cli metadata SHEET_ID | jq -r '.sheets[].properties.title'
+sheet-cli meta_read SHEET_ID | jq -r '.sheets[].properties.title'
 ```
 
 **Get sheet IDs:**
 ```bash
-sheet-cli metadata SHEET_ID | jq -r '.sheets[] | "\(.properties.title): \(.properties.sheetId)"'
+sheet-cli meta_read SHEET_ID | jq -r '.sheets[] | "\(.properties.title): \(.properties.sheetId)"'
 ```
 
 **Find named ranges:**
 ```bash
-sheet-cli metadata SHEET_ID | jq '.namedRanges'
+sheet-cli meta_read SHEET_ID | jq '.namedRanges'
 ```
 
 **Pretty print:**
 ```bash
-sheet-cli metadata SHEET_ID | jq '.'
+sheet-cli meta_read SHEET_ID | jq '.'
 ```
 
 ---
@@ -527,7 +529,7 @@ sheet-cli read SHEET_ID A1:A10 | \
 
 ```bash
 # Create formatted table
-cat << 'EOF' | sheet-cli structure SHEET_ID
+cat << 'EOF' | sheet-cli meta_write SHEET_ID
 {
   "requests": [
     {"repeatCell": {
@@ -560,12 +562,14 @@ EOF
 
 ```bash
 # Missing credentials.json
-Error: [Errno 2] No such file or directory: 'credentials.json'
+Error: [Errno 2] No such file or directory: '~/.sheet-cli/credentials.json'
 # Solution: Download OAuth credentials from Google Cloud Console
+mkdir -p ~/.sheet-cli && chmod 700 ~/.sheet-cli
+# Place credentials.json in ~/.sheet-cli/
 
 # Expired/invalid token
 # Solution: Delete token.pickle and re-authenticate
-rm token.pickle
+rm ~/.sheet-cli/token.pickle
 sheet-cli read SHEET_ID A1
 ```
 
@@ -589,7 +593,7 @@ sheet-cli write SHEET_ID
 # Error: No input provided. Use command line args or pipe data to stdin.
 
 # Structure with no stdin
-sheet-cli structure SHEET_ID
+sheet-cli meta_write SHEET_ID
 # Error: No input provided. Pipe JSON to stdin.
 ```
 
@@ -608,11 +612,11 @@ sheet-cli read $SHEET_ID A1:A10
 
 ```bash
 # Read metadata and extract specific fields
-sheet-cli metadata $SHEET_ID | jq '.sheets[0].properties'
+sheet-cli meta_read $SHEET_ID | jq '.sheets[0].properties'
 
 # Build structure requests with jq
 jq -n '{"requests": [{"addSheet": {"properties": {"title": "NewSheet"}}}]}' | \
-  sheet-cli structure $SHEET_ID
+  sheet-cli meta_write $SHEET_ID
 ```
 
 ### Use heredocs for multi-line input
