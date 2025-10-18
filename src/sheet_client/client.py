@@ -507,3 +507,91 @@ class SheetsClient:
             body=body
         )
         return self._execute_with_retry(request)
+
+    def create(self, title: str, sheets: List[dict] = None) -> dict:
+        """Create a new spreadsheet.
+
+        Args:
+            title: Title for the new spreadsheet
+            sheets: Optional list of sheet properties dicts.
+                    If not provided, creates a single default sheet named 'Sheet1'.
+
+                    Example:
+                    [
+                        {
+                            'properties': {
+                                'title': 'Sales Data',
+                                'gridProperties': {
+                                    'rowCount': 100,
+                                    'columnCount': 10
+                                }
+                            }
+                        }
+                    ]
+
+        Returns:
+            Raw API response dict with:
+            {
+                'spreadsheetId': '...',
+                'spreadsheetUrl': 'https://docs.google.com/spreadsheets/d/...',
+                'properties': {
+                    'title': 'Spreadsheet Name',
+                    'locale': 'en_US',
+                    'timeZone': 'America/New_York'
+                },
+                'sheets': [
+                    {
+                        'properties': {
+                            'sheetId': 0,
+                            'title': 'Sheet1',
+                            'index': 0,
+                            'gridProperties': {
+                                'rowCount': 1000,
+                                'columnCount': 26
+                            }
+                        }
+                    }
+                ]
+            }
+
+        Examples:
+            # Create spreadsheet with default sheet
+            result = client.create('My Spreadsheet')
+            spreadsheet_id = result['spreadsheetId']
+            print(f"Created: {result['spreadsheetUrl']}")
+
+            # Create with custom sheet properties
+            result = client.create(
+                'Sales Report',
+                sheets=[{
+                    'properties': {
+                        'title': 'Q1 Sales',
+                        'gridProperties': {
+                            'rowCount': 100,
+                            'columnCount': 20
+                        }
+                    }
+                }]
+            )
+
+            # Create with multiple sheets
+            result = client.create(
+                'Multi-Sheet Report',
+                sheets=[
+                    {'properties': {'title': 'Sales'}},
+                    {'properties': {'title': 'Expenses'}},
+                    {'properties': {'title': 'Summary'}}
+                ]
+            )
+        """
+        body = {
+            'properties': {
+                'title': title
+            }
+        }
+
+        if sheets:
+            body['sheets'] = sheets
+
+        request = self.spreadsheets.create(body=body)
+        return self._execute_with_retry(request)

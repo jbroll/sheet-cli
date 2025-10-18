@@ -161,6 +161,32 @@ def cmd_metadata(args):
     print(json.dumps(result, indent=2))
 
 
+def cmd_create(args):
+    """Create a new spreadsheet.
+
+    Outputs result as JSON including spreadsheet ID and URL.
+    """
+    client = SheetsClient()
+
+    # Check if sheets config provided via stdin
+    sheets = None
+    if not sys.stdin.isatty():
+        input_text = formats.read_stdin()
+        if input_text:
+            try:
+                data = json.loads(input_text)
+                if isinstance(data, dict) and 'sheets' in data:
+                    sheets = data['sheets']
+                elif isinstance(data, list):
+                    sheets = data
+            except json.JSONDecodeError as e:
+                print(f"Error: Invalid JSON: {e}", file=sys.stderr)
+                sys.exit(1)
+
+    result = client.create(args.title, sheets=sheets)
+    print(json.dumps(result, indent=2))
+
+
 def main():
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -169,6 +195,12 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
+  # Create a new spreadsheet
+  sheet-cli create "My Spreadsheet"
+
+  # Create with custom sheets (from stdin JSON)
+  echo '[{"properties": {"title": "Sales"}}]' | sheet-cli create "My Report"
+
   # Read entire spreadsheet (all sheets)
   sheet-cli read SHEET_ID
 
@@ -218,6 +250,11 @@ Examples:
     parser_meta_read = subparsers.add_parser('meta_read', help='Read spreadsheet metadata')
     parser_meta_read.add_argument('spreadsheet_id', help='Spreadsheet ID')
     parser_meta_read.set_defaults(func=cmd_metadata)
+
+    # create command
+    parser_create = subparsers.add_parser('create', help='Create a new spreadsheet')
+    parser_create.add_argument('title', help='Spreadsheet title')
+    parser_create.set_defaults(func=cmd_create)
 
     # Parse args and execute
     args = parser.parse_args()

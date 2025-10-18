@@ -35,6 +35,34 @@ class MCPSheetsServer:
         """Return list of available MCP tools."""
         return [
             {
+                "name": "create_spreadsheet",
+                "description": """Create a new Google Spreadsheet.
+
+RETURNS:
+- spreadsheetId: The ID to use for all subsequent operations
+- spreadsheetUrl: Direct URL to open the spreadsheet in browser
+
+BEST PRACTICES:
+- Store the returned spreadsheetId for all future read/write operations
+- Use the spreadsheetUrl to share with users or open in browser
+- Optionally provide custom sheet configurations via sheets parameter""",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "title": {
+                            "type": "string",
+                            "description": "Title for the new spreadsheet"
+                        },
+                        "sheets": {
+                            "type": "array",
+                            "items": {"type": "object"},
+                            "description": "Optional list of sheet configuration objects. Each can specify title, rowCount, columnCount, etc."
+                        }
+                    },
+                    "required": ["title"]
+                }
+            },
+            {
                 "name": "read_cells",
                 "description": """Read cell values and/or formulas from Google Sheets ranges.
 
@@ -188,7 +216,9 @@ EFFICIENCY:
             self.initialize()
 
         try:
-            if name == "read_cells":
+            if name == "create_spreadsheet":
+                return self._create_spreadsheet(arguments)
+            elif name == "read_cells":
                 return self._read_cells(arguments)
             elif name == "write_cells":
                 return self._write_cells(arguments)
@@ -200,6 +230,14 @@ EFFICIENCY:
                 return {"error": f"Unknown tool: {name}"}
         except Exception as e:
             return {"error": str(e)}
+
+    def _create_spreadsheet(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute create_spreadsheet tool."""
+        title = args["title"]
+        sheets = args.get("sheets")
+
+        result = self.client.create(title, sheets=sheets)
+        return {"result": result}
 
     def _read_cells(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Execute read_cells tool."""
