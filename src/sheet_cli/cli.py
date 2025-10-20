@@ -12,15 +12,17 @@ from . import formats
 def cmd_read(args):
     """Read values from specified cells/ranges.
 
-    Outputs cell/value pairs to stdout.
+    Outputs cell/value pairs (default) or Sheets API v4 JSON (--json).
     """
     client = SheetsClient()
 
-    # If no ranges specified, read all sheets
-    if not args.ranges:
-        # Get metadata to discover all sheets
+    # Get metadata if needed (for --json or if no ranges specified)
+    metadata = None
+    if not args.ranges or getattr(args, 'json', False):
         metadata = client.meta_read(args.spreadsheet_id)
 
+    # If no ranges specified, read all sheets
+    if not args.ranges:
         # Build list of sheet names to read
         sheet_names = [sheet['properties']['title'] for sheet in metadata.get('sheets', [])]
 
@@ -34,27 +36,64 @@ def cmd_read(args):
     # Read all ranges
     response = client.read(args.spreadsheet_id, args.ranges, types=CellData.VALUE | CellData.FORMULA)
 
-    # Extract values from response
-    result = {}
+    # Output format: JSON (Sheets API v4) or text (cell/value pairs)
+    if getattr(args, 'json', False):
+        # Sheets API v4 format
+        sheets_data = {}
 
-    # Handle single range vs multiple ranges
-    if 'values' in response:
-        # Single range response
-        range_str = response['range']
-        values = response.get('values', [])
-        cell_values = formats.expand_range_to_cells(range_str, values)
-        result.update(cell_values)
-    elif 'valueRanges' in response:
-        # Multiple ranges response
-        for value_range in response['valueRanges']:
-            range_str = value_range['range']
-            values = value_range.get('values', [])
+        # Handle single range vs multiple ranges
+        if 'values' in response:
+            # Single range response
+            range_str = response['range']
+            values = response.get('values', [])
+            # Extract sheet name from range (e.g., "Sheet1!A1:B10" -> "Sheet1")
+            sheet_name = range_str.split('!')[0].strip("'\"") if '!' in range_str else 'Sheet1'
+            sheets_data[sheet_name] = {
+                'range': range_str.split('!')[1] if '!' in range_str else range_str,
+                'values': values
+            }
+        elif 'valueRanges' in response:
+            # Multiple ranges response
+            for value_range in response['valueRanges']:
+                range_str = value_range['range']
+                values = value_range.get('values', [])
+                # Extract sheet name
+                sheet_name = range_str.split('!')[0].strip("'\"") if '!' in range_str else 'Sheet1'
+                sheets_data[sheet_name] = {
+                    'range': range_str.split('!')[1] if '!' in range_str else range_str,
+                    'values': values
+                }
+
+        # Build Sheets API v4 output
+        output = {
+            'spreadsheetId': args.spreadsheet_id,
+            'spreadsheetUrl': f'https://docs.google.com/spreadsheets/d/{args.spreadsheet_id}/edit',
+            'title': metadata['properties']['title'] if metadata else '',
+            'sheets': sheets_data
+        }
+        print(json.dumps(output, indent=2))
+    else:
+        # Text format (original behavior)
+        result = {}
+
+        # Handle single range vs multiple ranges
+        if 'values' in response:
+            # Single range response
+            range_str = response['range']
+            values = response.get('values', [])
             cell_values = formats.expand_range_to_cells(range_str, values)
             result.update(cell_values)
+        elif 'valueRanges' in response:
+            # Multiple ranges response
+            for value_range in response['valueRanges']:
+                range_str = value_range['range']
+                values = value_range.get('values', [])
+                cell_values = formats.expand_range_to_cells(range_str, values)
+                result.update(cell_values)
 
-    # Output as cell/value pairs
-    output = formats.format_cell_value_pairs(result)
-    print(output)
+        # Output as cell/value pairs
+        output = formats.format_cell_value_pairs(result)
+        print(output)
 
 
 def cmd_write(args):
@@ -204,6 +243,9 @@ Examples:
   # Read entire spreadsheet (all sheets)
   sheet-cli read SHEET_ID
 
+  # Read with Sheets API v4 JSON output (for analysis tools)
+  sheet-cli read --json SHEET_ID > data.json
+
   # Read multiple cells/ranges
   sheet-cli read SHEET_ID A1 A2 B1:B10 Sheet2!C1:C5
 
@@ -233,6 +275,7 @@ Examples:
     parser_read = subparsers.add_parser('read', help='Read cell values')
     parser_read.add_argument('spreadsheet_id', help='Spreadsheet ID')
     parser_read.add_argument('ranges', nargs='*', help='Cell or range (A1, A1:B10, Sheet1!A1). If omitted, reads all sheets.')
+    parser_read.add_argument('--json', action='store_true', help='Output in Sheets API v4 JSON format (compatible with analysis tools)')
     parser_read.set_defaults(func=cmd_read)
 
     # Write command
