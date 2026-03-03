@@ -20,8 +20,10 @@ Dependencies:
 2. Go to APIs & Services → Credentials
 3. Create Credentials → OAuth 2.0 Client ID → Desktop App
 4. Download as `~/.sheet-cli/credentials.json`
+5. Enable both the **Google Sheets API** and **Google Drive API** in the console
+6. Run `sheet-cli auth` to authenticate (opens browser, caches token)
 
-First run opens browser for authorization. Token cached to `~/.sheet-cli/token.pickle` and auto-refreshes.
+Token cached to `~/.sheet-cli/token.pickle` and auto-refreshes. Re-run `sheet-cli auth` to switch accounts.
 
 **Security**: Credentials stored in `~/.sheet-cli/` with secure permissions (directory: 700, files: 600).
 
@@ -48,21 +50,18 @@ client = SheetsClient(
 - Raises `AuthenticationError` if OAuth fails
 - No default spreadsheet - specify per method call
 
-## Core API - Four Methods
+## Core API
 
-The entire API consists of four methods with perfect symmetry:
+| Method | Description |
+|--------|-------------|
+| `list_spreadsheets(include_shared_drives)` | List spreadsheets from Google Drive |
+| `read(spreadsheet_id, ranges, types)` | Read cell data |
+| `write(spreadsheet_id, data)` | Write cell data |
+| `meta_read(spreadsheet_id)` | Read metadata/structure |
+| `meta_write(spreadsheet_id, requests)` | Write metadata/structure |
+| `create(title, sheets)` | Create a new spreadsheet |
 
-| Operation | Read | Write |
-|-----------|------|-------|
-| **Cell Data** | `read()` | `write()` |
-| **Metadata** | `meta_read()` | `meta_write()` |
-
-1. **`read(spreadsheet_id, ranges, types)`** - Read cell data
-2. **`write(spreadsheet_id, data)`** - Write cell data
-3. **`meta_read(spreadsheet_id)`** - Read metadata/structure
-4. **`meta_write(spreadsheet_id, requests)`** - Write metadata/structure
-
-All methods require `spreadsheet_id` as the first parameter.
+All methods except `list_spreadsheets` require `spreadsheet_id` as the first parameter.
 
 ## CellData Flags
 
@@ -84,6 +83,49 @@ client.read(['Sheet1!A1:C10'], types=CellData.VALUE | CellData.FORMULA)
 # Everything
 client.read(['Sheet1!A1:C10'], types=CellData.VALUE | CellData.FORMULA | CellData.FORMAT | CellData.NOTE)
 ```
+
+## Method 0: list_spreadsheets()
+
+List spreadsheets visible to the authenticated user via Google Drive API.
+
+```python
+def list_spreadsheets(include_shared_drives: bool = False) -> List[dict]
+```
+
+**Parameters:**
+- `include_shared_drives` — If True, also searches Shared Drives (team/org drives). Default False returns files from My Drive and Shared With Me.
+
+**Returns:**
+
+List of file metadata dicts (all pages merged):
+```python
+[
+    {
+        'id': '1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms',
+        'name': 'Budget 2026',
+        'modifiedTime': '2026-02-28T14:23:01.000Z',
+        'owners': [{'displayName': 'John', 'emailAddress': 'john@example.com'}],
+        'shared': False
+    },
+    ...
+]
+```
+
+The `id` field is the spreadsheet ID used by all other methods.
+
+**Examples:**
+
+```python
+# List all spreadsheets
+files = client.list_spreadsheets()
+for f in files:
+    print(f['id'], f['name'])
+
+# Include shared/team drives
+files = client.list_spreadsheets(include_shared_drives=True)
+```
+
+---
 
 ## Method 1: read()
 

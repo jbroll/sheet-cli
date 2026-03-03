@@ -15,22 +15,27 @@ venv/bin/sheet-cli
 
 ## Commands
 
-The CLI provides four commands that map directly to the library API:
+The CLI provides seven commands:
 
 ```bash
+sheet-cli auth       # Authenticate and cache OAuth token
+sheet-cli list       # List spreadsheets from Google Drive
 sheet-cli read       # Read cell values
 sheet-cli write      # Write cell values
-sheet-cli meta_write  # Batch structure operations
-sheet-cli meta_read   # Get spreadsheet metadata
+sheet-cli copy       # Copy a range between spreadsheets
+sheet-cli meta_write # Batch structure operations
+sheet-cli meta_read  # Get spreadsheet metadata
 ```
 
 ## Authentication
 
-First run initiates OAuth flow. Browser opens for authorization. Token cached to `~/.sheet-cli/token.pickle` for subsequent runs.
+Run `sheet-cli auth` to authenticate. Browser opens for authorization. Token cached to `~/.sheet-cli/token.pickle` for subsequent runs. Re-run `auth` to switch accounts or after scope changes.
 
 Required files (stored in `~/.sheet-cli/`):
-- `~/.sheet-cli/credentials.json` - OAuth 2.0 Client ID from Google Cloud Console
+- `~/.sheet-cli/credentials.json` - OAuth 2.0 Client ID (Desktop app) from Google Cloud Console
 - `~/.sheet-cli/token.pickle` - Auto-generated after first auth
+
+**APIs to enable in Google Cloud Console**: Google Sheets API, Google Drive API
 
 **Security**: Credentials stored with secure permissions (directory: 700, files: 600)
 
@@ -82,6 +87,120 @@ Or for ranges:
 ```
 
 **Auto-detection:** CLI detects format automatically (JSON starts with `{` or `[`).
+
+---
+
+## auth
+
+Authenticate with Google and cache the OAuth token.
+
+### Syntax
+
+```bash
+sheet-cli auth
+```
+
+### Behavior
+
+- Deletes any existing cached token and runs a fresh OAuth flow
+- Opens a browser tab for Google sign-in
+- Caches the new token to `~/.sheet-cli/token.pickle`
+- Use this on first setup, to switch accounts, or if authentication breaks
+
+### Example
+
+```bash
+sheet-cli auth
+# Browser opens → sign in → grant access
+# Authentication successful. Token cached at ~/.sheet-cli/token.pickle
+```
+
+---
+
+## list
+
+List spreadsheets visible to the authenticated user via Google Drive.
+
+### Syntax
+
+```bash
+sheet-cli list [--shared] [--json]
+```
+
+### Options
+
+- `--shared` — Include files from Shared Drives (team/org drives)
+- `--json` — Output raw JSON instead of text table
+
+### Output
+
+Default text table (ID, modified date, name):
+
+```
+1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms  2026-02-28  Budget 2026
+1SMbQMaFt6UlPWvkS2T4r4e2VSSAqbeT0PjKmSSIiMM8  2026-01-15  Q1 Report
+```
+
+The ID column is what you pass to all other commands.
+
+### Examples
+
+```bash
+# List all spreadsheets
+sheet-cli list
+
+# Include shared/team drives
+sheet-cli list --shared
+
+# Full metadata as JSON
+sheet-cli list --json
+```
+
+---
+
+## copy
+
+Copy a range from one spreadsheet to another (or between tabs in the same spreadsheet).
+
+### Syntax
+
+```bash
+# Same spreadsheet (3 args)
+sheet-cli copy SHEET_ID SOURCE_RANGE DEST_RANGE [--value]
+
+# Different spreadsheets (4 args)
+sheet-cli copy SOURCE_ID SOURCE_RANGE DEST_ID DEST_RANGE [--value]
+```
+
+### Arguments
+
+- `SOURCE_RANGE` — A1 notation range to copy from (e.g. `Sheet1!A1:C10`)
+- `DEST_RANGE` — Top-left anchor cell to paste to (e.g. `Sheet2!A1`)
+
+### Options
+
+- `--value` — Copy computed values only; default preserves formulas
+
+### Output
+
+```
+Copied 10x3 cells to DEST_ID Sheet2!A1
+```
+
+### Examples
+
+```bash
+# Copy between tabs in the same spreadsheet
+sheet-cli copy SHEET_ID Sheet1!A1:C10 Archive!A1
+
+# Copy to a different spreadsheet
+sheet-cli copy SOURCE_ID Sheet1!A1:C10 DEST_ID Sheet2!A1
+
+# Copy values only (flatten formulas)
+sheet-cli copy SHEET_ID Sheet1!A1:C10 Sheet2!A1 --value
+```
+
+**Note:** If no sheet name is given in the range (e.g. `A1` instead of `Sheet1!A1`), Google defaults to the first (leftmost) tab.
 
 ---
 
@@ -502,8 +621,14 @@ echo "A1 $(date)" | sheet-cli write SHEET_ID
 ### Copy data between sheets
 
 ```bash
-# Read from one sheet, write to another
-sheet-cli read SOURCE_SHEET A1:C10 | sheet-cli write DEST_SHEET
+# Copy between tabs (same spreadsheet)
+sheet-cli copy SHEET_ID Sheet1!A1:C10 Archive!A1
+
+# Copy to a different spreadsheet
+sheet-cli copy SOURCE_ID Sheet1!A1:C10 DEST_ID Sheet2!A1
+
+# Copy values only (no formulas)
+sheet-cli copy SHEET_ID Sheet1!A1:C10 Sheet2!A1 --value
 ```
 
 ### Backup data
@@ -561,16 +686,11 @@ EOF
 ### Authentication Errors
 
 ```bash
-# Missing credentials.json
-Error: [Errno 2] No such file or directory: '~/.sheet-cli/credentials.json'
-# Solution: Download OAuth credentials from Google Cloud Console
-mkdir -p ~/.sheet-cli && chmod 700 ~/.sheet-cli
-# Place credentials.json in ~/.sheet-cli/
+# Missing credentials.json — run auth for setup instructions
+sheet-cli auth
 
-# Expired/invalid token
-# Solution: Delete token.pickle and re-authenticate
-rm ~/.sheet-cli/token.pickle
-sheet-cli read SHEET_ID A1
+# Expired/invalid token — re-authenticate
+sheet-cli auth
 ```
 
 ### Invalid Input

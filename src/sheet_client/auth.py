@@ -12,15 +12,26 @@ from google.oauth2.credentials import Credentials
 from .exceptions import AuthenticationError
 
 
-# Scopes required for Google Sheets API
-SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
+# Scopes required for Google Sheets and Drive API
+SCOPES = [
+    'https://www.googleapis.com/auth/spreadsheets',
+    'https://www.googleapis.com/auth/drive.metadata.readonly',
+]
 
 # Default credentials directory
 DEFAULT_CREDS_DIR = Path.home() / '.sheet-cli'
 
 
+def _has_required_scopes(creds: Credentials) -> bool:
+    """Return True if credentials include all required scopes."""
+    if not getattr(creds, 'scopes', None):
+        return False
+    return set(SCOPES).issubset(set(creds.scopes))
+
+
 def get_credentials(credentials_path: str = None,
-                   token_path: str = None) -> Credentials:
+                   token_path: str = None,
+                   force_reauth: bool = False) -> Credentials:
     """Get OAuth 2.0 credentials, prompting user if needed.
 
     Args:
@@ -28,6 +39,7 @@ def get_credentials(credentials_path: str = None,
                          (defaults to ~/.sheet-cli/credentials.json)
         token_path: Path to cached token pickle file
                    (defaults to ~/.sheet-cli/token.pickle)
+        force_reauth: If True, delete any cached token and re-run OAuth flow
 
     Returns:
         Valid Credentials object
@@ -46,6 +58,10 @@ def get_credentials(credentials_path: str = None,
 
     creds: Optional[Credentials] = None
 
+    # Force re-authentication if requested
+    if force_reauth and os.path.exists(token_path):
+        os.remove(token_path)
+
     # Try to load cached token
     if os.path.exists(token_path):
         try:
@@ -53,6 +69,12 @@ def get_credentials(credentials_path: str = None,
                 creds = pickle.load(token)
         except Exception as e:
             raise AuthenticationError(f"Failed to load token from {token_path}: {e}")
+
+        # Check if token has all required scopes (e.g. after scope expansion)
+        if creds and not _has_required_scopes(creds):
+            print("OAuth scopes have changed, re-authenticating...", flush=True)
+            os.remove(token_path)
+            creds = None
 
     # If no valid credentials, authenticate
     if not creds or not creds.valid:

@@ -6,6 +6,8 @@ import sys
 from typing import List, Dict, Any
 
 from sheet_client import SheetsClient, CellData
+from sheet_client.auth import get_credentials
+from sheet_client.exceptions import SheetsClientError, AuthenticationError
 from . import formats
 
 
@@ -200,6 +202,105 @@ def cmd_metadata(args):
     print(json.dumps(result, indent=2))
 
 
+def cmd_copy(args):
+    """Copy a range from one spreadsheet to another.
+
+    Copies formulas by default. Use --value to copy computed values only.
+    The destination is the top-left anchor cell; the full range is
+    determined by the size of the source data.
+    """
+    client = SheetsClient()
+
+    # Parse positional args: 3 = same sheet, 4 = different sheets
+    if len(args.copy_args) == 3:
+        source_id, source_range, dest_range = args.copy_args
+        dest_id = source_id
+    elif len(args.copy_args) == 4:
+        source_id, source_range, dest_id, dest_range = args.copy_args
+    else:
+        print("Error: copy requires 3 or 4 arguments: SOURCE_ID SOURCE_RANGE [DEST_ID] DEST_RANGE",
+              file=sys.stderr)
+        sys.exit(1)
+
+    # Read source — formula render preserves =... strings; value render flattens them
+    read_types = CellData.VALUE if args.value else CellData.VALUE | CellData.FORMULA
+    response = client.read(source_id, [source_range], types=read_types)
+
+    # Extract 2D values array from response
+    if 'values' in response:
+        values = response['values']
+    elif 'valueRanges' in response:
+        values = response['valueRanges'][0].get('values', [])
+    else:
+        values = []
+
+    if not values:
+        print("Source range is empty.", file=sys.stderr)
+        sys.exit(1)
+
+    # Write to destination anchor — API expands from top-left
+    client.write(dest_id, [{'range': dest_range, 'values': values}])
+
+    rows = len(values)
+    cols = max(len(row) for row in values)
+    print(f"Copied {rows}x{cols} cells to {dest_id} {dest_range}")
+
+
+def cmd_list(args):
+    """List spreadsheets from Google Drive.
+
+    Outputs a table of spreadsheets (ID, name, modified date) by default,
+    or raw JSON with --json.
+    """
+    client = SheetsClient()
+    files = client.list_spreadsheets(include_shared_drives=args.shared)
+
+    if not files:
+        print("No spreadsheets found.")
+        return
+
+    if getattr(args, 'json', False):
+        print(json.dumps(files, indent=2))
+    else:
+        for f in files:
+            modified = f.get('modifiedTime', '')[:10]  # YYYY-MM-DD
+            name = f.get('name', '')
+            fid = f.get('id', '')
+            print(f"{fid}  {modified}  {name}")
+
+
+_CREDENTIALS_SETUP = """
+To set up authentication:
+
+  1. Go to https://console.cloud.google.com/
+  2. Create a project (or select an existing one)
+  3. Enable the Google Sheets API and Google Drive API
+  4. Go to APIs & Services > Credentials
+  5. Create an OAuth 2.0 Client ID (Application type: Desktop app)
+  6. Download the JSON and save it to:
+       ~/.sheet-cli/credentials.json
+  7. Run: sheet-cli auth
+"""
+
+
+def cmd_auth(args):
+    """Authenticate with Google and cache the token.
+
+    Forces a fresh OAuth flow, useful after scope changes or to switch accounts.
+    """
+    try:
+        get_credentials(force_reauth=True)
+    except AuthenticationError as e:
+        msg = str(e)
+        if 'Credentials file not found' in msg:
+            print(f"Error: {msg}", file=sys.stderr)
+            print(_CREDENTIALS_SETUP, file=sys.stderr)
+        else:
+            print(f"Error: {msg}", file=sys.stderr)
+        sys.exit(1)
+    print("Authentication successful. Token cached at ~/.sheet-cli/token.pickle")
+
+
 def cmd_create(args):
     """Create a new spreadsheet.
 
@@ -299,9 +400,43 @@ Examples:
     parser_create.add_argument('title', help='Spreadsheet title')
     parser_create.set_defaults(func=cmd_create)
 
+    # copy command
+    parser_copy = subparsers.add_parser('copy', help='Copy a range between spreadsheets',
+                                        description='Copy a range from one spreadsheet to another. '
+                                                    'Formulas are preserved by default. '
+                                                    'The destination is the top-left anchor cell.')
+    parser_copy.add_argument('copy_args', nargs='+',
+                             metavar='arg',
+                             help='SOURCE_ID SOURCE_RANGE DEST_RANGE  '
+                                  '(same spreadsheet) or  '
+                                  'SOURCE_ID SOURCE_RANGE DEST_ID DEST_RANGE  '
+                                  '(different spreadsheets)')
+    parser_copy.add_argument('--value', action='store_true',
+                             help='Copy computed values only, not formulas')
+    parser_copy.set_defaults(func=cmd_copy)
+
+    # list command
+    parser_list = subparsers.add_parser('list', help='List spreadsheets from Google Drive',
+                                        description='List spreadsheets visible to the authenticated user. '
+                                                    'Outputs ID, modified date, and name. '
+                                                    'Use the ID with other sheet-cli commands.')
+    parser_list.add_argument('--shared', action='store_true',
+                             help='Include files from Shared Drives (team/org drives)')
+    parser_list.add_argument('--json', action='store_true',
+                             help='Output raw JSON instead of text table')
+    parser_list.set_defaults(func=cmd_list)
+
+    # auth command
+    parser_auth = subparsers.add_parser('auth', help='Authenticate and cache OAuth token')
+    parser_auth.set_defaults(func=cmd_auth)
+
     # Parse args and execute
     args = parser.parse_args()
-    args.func(args)
+    try:
+        args.func(args)
+    except SheetsClientError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == '__main__':

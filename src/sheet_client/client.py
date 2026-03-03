@@ -49,6 +49,7 @@ class SheetsClient:
         creds = get_credentials(credentials_path, token_path)
         self.service = build('sheets', 'v4', credentials=creds)
         self.spreadsheets = self.service.spreadsheets()
+        self.drive = build('drive', 'v3', credentials=creds)
 
     def _get_spreadsheet_id(self, spreadsheet_id: str) -> str:
         """Validate and return spreadsheet ID.
@@ -507,6 +508,52 @@ class SheetsClient:
             body=body
         )
         return self._execute_with_retry(request)
+
+    def list_spreadsheets(self, include_shared_drives: bool = False) -> List[dict]:
+        """List spreadsheets visible to the authenticated user.
+
+        Args:
+            include_shared_drives: If True, also search Shared Drives
+                                   (organizational/team drives). Defaults to False,
+                                   which returns files from My Drive and Shared With Me.
+
+        Returns:
+            List of file metadata dicts (all pages merged):
+            [
+                {
+                    'id': '...',           # Spreadsheet ID (use with other commands)
+                    'name': '...',         # File name
+                    'modifiedTime': '...', # ISO 8601 timestamp
+                    'owners': [{'displayName': '...', 'emailAddress': '...'}],
+                    'shared': True/False
+                },
+                ...
+            ]
+        """
+        files = []
+        page_token = None
+        query = "mimeType='application/vnd.google-apps.spreadsheet' and trashed=false"
+
+        while True:
+            kwargs = {
+                'q': query,
+                'fields': 'nextPageToken, files(id,name,modifiedTime,owners,shared)',
+                'pageSize': 1000,
+            }
+            if page_token:
+                kwargs['pageToken'] = page_token
+            if include_shared_drives:
+                kwargs['includeItemsFromAllDrives'] = True
+                kwargs['supportsAllDrives'] = True
+
+            request = self.drive.files().list(**kwargs)
+            response = self._execute_with_retry(request)
+            files.extend(response.get('files', []))
+            page_token = response.get('nextPageToken')
+            if not page_token:
+                break
+
+        return files
 
     def create(self, title: str, sheets: List[dict] = None) -> dict:
         """Create a new spreadsheet.

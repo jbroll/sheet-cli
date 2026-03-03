@@ -18,18 +18,44 @@ venv/bin/pip install -e .
    - Create OAuth 2.0 credentials (Desktop app)
    - Download as `~/.sheet-cli/credentials.json`
 
-2. **First authentication** (opens browser once):
+2. **Enable APIs** in Google Cloud Console: Google Sheets API and Google Drive API
+
+3. **First authentication** (opens browser once):
 ```bash
-venv/bin/sheet-cli meta_read YOUR_SHEET_ID
+venv/bin/sheet-cli auth
 ```
    - Browser opens for Google sign-in
-   - Grant access to sheets
+   - Grant access to sheets and Drive metadata
    - Token cached in `~/.sheet-cli/token.pickle`
    - Credentials stored with secure permissions (directory: 700, files: 600)
+   - Re-run `auth` any time to switch accounts or force re-authentication
 
 ## Command Reference
 
-### 1. read - Read Cell Values
+### 1. auth - Authenticate
+
+```bash
+venv/bin/sheet-cli auth
+```
+
+Forces a fresh OAuth flow. Use on first setup, to switch accounts, or when authentication breaks.
+
+### 2. list - List Spreadsheets
+
+```bash
+# Text table: ID, modified date, name
+venv/bin/sheet-cli list
+
+# Include Shared Drives (team/org drives)
+venv/bin/sheet-cli list --shared
+
+# Raw JSON output
+venv/bin/sheet-cli list --json
+```
+
+The ID in the first column is what you pass to all other commands.
+
+### 3. read - Read Cell Values
 
 Read values or formulas from cells/ranges.
 
@@ -249,9 +275,14 @@ echo '{
 
 ### Example 4: Copy Data Between Sheets
 ```bash
-# Read from one sheet, write to another
-venv/bin/sheet-cli read SOURCE_SHEET_ID A1:C10 | \
-  venv/bin/sheet-cli write TARGET_SHEET_ID
+# Copy between tabs in the same spreadsheet
+venv/bin/sheet-cli copy SHEET_ID Sheet1!A1:C10 Archive!A1
+
+# Copy to a different spreadsheet
+venv/bin/sheet-cli copy SOURCE_ID Sheet1!A1:C10 DEST_ID Sheet2!A1
+
+# Copy values only (flatten formulas)
+venv/bin/sheet-cli copy SHEET_ID Sheet1!A1:C10 Sheet2!A1 --value
 ```
 
 ## Tips
@@ -290,13 +321,11 @@ venv/bin/sheet-cli read SOURCE_SHEET_ID A1:C10 | \
 ## Troubleshooting
 
 ### "Credentials file not found"
-- Ensure `~/.sheet-cli/credentials.json` exists
-- Download from Google Cloud Console and place in `~/.sheet-cli/`
-- Create directory if needed: `mkdir -p ~/.sheet-cli && chmod 700 ~/.sheet-cli`
+- Run `sheet-cli auth` for step-by-step setup instructions
+- Ensure `~/.sheet-cli/credentials.json` is a Desktop app OAuth 2.0 Client ID JSON
 
 ### "Token expired" / "Invalid credentials"
-- Delete `~/.sheet-cli/token.pickle`
-- Run any command to re-authenticate
+- Run `sheet-cli auth` to re-authenticate
 
 ### "Permission denied"
 - Ensure your Google account has access to the spreadsheet
