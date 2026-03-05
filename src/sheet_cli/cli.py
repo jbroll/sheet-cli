@@ -10,6 +10,20 @@ from sheet_client.auth import get_credentials
 from sheet_client.exceptions import SheetsClientError, AuthenticationError
 from . import formats
 
+def _resolve_sheet_id(client, spreadsheet_id, sheet_ref):
+    # Numeric sheetId passed directly
+    if sheet_ref.isdigit():
+        return int(sheet_ref)
+
+    # Otherwise resolve by sheet title
+    meta = client.meta_read(spreadsheet_id)
+    for sheet in meta.get("sheets", []):
+        props = sheet.get("properties", {})
+        if props.get("title") == sheet_ref:
+            return props.get("sheetId")
+
+    raise SheetsClientError(f"Sheet not found: {sheet_ref}")
+
 
 def cmd_read(args):
     """Read values from specified cells/ranges.
@@ -246,6 +260,63 @@ def cmd_copy(args):
     print(f"Copied {rows}x{cols} cells to {dest_id} {dest_range}")
 
 
+def cmd_insert(args):
+    """Insert a row or column left/right of a given index."""
+    client = SheetsClient()
+
+    sheet_id = _resolve_sheet_id(
+        client,
+        args.spreadsheet_id,
+        args.sheet_ref
+    )
+
+    # Determine whether this is a row (number) or column (letter)
+    ref = args.ref
+    side = args.side
+
+    requests = []
+
+    if ref.isdigit():
+        # Row insertion (1-based → 0-based)
+        index = int(ref) - 1
+        insert_index = index if side == "above" else index + 1
+
+        requests.append({
+            "insertDimension": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "dimension": "ROWS",
+                    "startIndex": insert_index,
+                    "endIndex": insert_index + 1,
+                },
+                "inheritFromBefore": side == "right",
+            }
+        })
+
+    else:
+        # Column insertion (A, B, AA… → 0-based)
+        col = ref.upper()
+        index = 0
+        for c in col:
+            index = index * 26 + (ord(c) - ord('A') + 1)
+        index -= 1
+
+        insert_index = index if side == "left" else index + 1
+
+        requests.append({
+            "insertDimension": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "dimension": "COLUMNS",
+                    "startIndex": insert_index,
+                    "endIndex": insert_index + 1,
+                },
+                "inheritFromBefore": side == "right",
+            }
+        })
+
+    client.meta_write(args.spreadsheet_id, requests)
+
 def cmd_list(args):
     """List spreadsheets from Google Drive.
 
@@ -414,6 +485,29 @@ Examples:
     parser_copy.add_argument('--value', action='store_true',
                              help='Copy computed values only, not formulas')
     parser_copy.set_defaults(func=cmd_copy)
+
+
+    parser_insert = subparsers.add_parser(
+        'insert',
+        help='Insert a row or column left|right|above|below of a reference'
+    )
+    parser_insert.add_argument('spreadsheet_id', help='Spreadsheet ID')
+    parser_insert.add_argument(
+        'sheet_ref',
+        type=str,
+        help='Sheet ID (numeric, not sheet name)'
+    )
+    parser_insert.add_argument(
+        'ref',
+        help='Row number (e.g. 5) or column letter (e.g. C, AA)'
+    )
+    parser_insert.add_argument(
+        'side',
+        choices=['left', 'right', 'above', 'below'],
+        help='Insert to the left/right (columns) or above/below (rows)'
+    )
+    parser_insert.set_defaults(func=cmd_insert)
+
 
     # list command
     parser_list = subparsers.add_parser('list', help='List spreadsheets from Google Drive',
