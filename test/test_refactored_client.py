@@ -48,7 +48,7 @@ class TestSpreadsheetIdHandling:
         client = SheetsClient()
 
         with pytest.raises(ValueError, match="spreadsheet_id is required"):
-            client._get_spreadsheet_id(None)
+            client._get_spreadsheet_id(None)  # type: ignore[arg-type]
 
     @patch('sheet_client.client.get_credentials')
     @patch('sheet_client.client.build')
@@ -100,7 +100,7 @@ class TestReadMethodSpreadsheetId:
         client = SheetsClient()
 
         with pytest.raises(ValueError, match="spreadsheet_id is required"):
-            client.read(None, ['A1'])
+            client.read(None, ['A1'])  # type: ignore[arg-type]
 
 
 class TestWriteMethodSpreadsheetId:

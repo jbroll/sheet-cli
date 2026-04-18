@@ -1,0 +1,14 @@
+{
+  "include": [
+    "src",
+    "test",
+    "example",
+    "mcp-server"
+  ],
+  "extraPaths": [
+    "src"
+  ],
+  "venvPath": ".",
+  "venv": "venv",
+  "pythonVersion": "3.8"
+}

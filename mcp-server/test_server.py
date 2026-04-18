@@ -27,11 +27,13 @@ EXPECTED_TOOLS = [
 
 
 def send_request(process, request):
+    assert process.stdin is not None and process.stdout is not None
     line = json.dumps(request) + "\n"
     process.stdin.write(line)
     process.stdin.flush()
     response = process.stdout.readline()
     if not response.strip():
+        assert process.stderr is not None
         err = process.stderr.read()
         raise RuntimeError(f"empty response; stderr:\n{err}")
     return json.loads(response)
@@ -114,7 +116,7 @@ def test_mcp_server():
 
     except AssertionError as e:
         print(f"\n\u274c Test failed: {e}")
-        stderr = process.stderr.read()
+        stderr = process.stderr.read() if process.stderr else ""
         if stderr:
             print(f"stderr:\n{stderr}")
         return False

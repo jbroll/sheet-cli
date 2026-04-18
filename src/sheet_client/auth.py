@@ -24,13 +24,14 @@ DEFAULT_CREDS_DIR = Path.home() / '.sheet-cli'
 
 def _has_required_scopes(creds: Credentials) -> bool:
     """Return True if credentials include all required scopes."""
-    if not getattr(creds, 'scopes', None):
+    scopes = getattr(creds, 'scopes', None)
+    if not scopes:
         return False
-    return set(SCOPES).issubset(set(creds.scopes))
+    return set(SCOPES).issubset(set(scopes))
 
 
-def get_credentials(credentials_path: str = None,
-                   token_path: str = None,
+def get_credentials(credentials_path: Optional[str] = None,
+                   token_path: Optional[str] = None,
                    force_reauth: bool = False) -> Credentials:
     """Get OAuth 2.0 credentials, prompting user if needed.
 
@@ -95,7 +96,9 @@ def get_credentials(credentials_path: str = None,
             try:
                 flow = InstalledAppFlow.from_client_secrets_file(
                     credentials_path, SCOPES)
-                creds = flow.run_local_server(port=0)
+                # run_local_server returns one of two Credentials union members;
+                # we treat it as google.oauth2.credentials.Credentials throughout.
+                creds = flow.run_local_server(port=0)  # type: ignore[assignment]
             except Exception as e:
                 raise AuthenticationError(f"OAuth flow failed: {e}")
 
@@ -108,4 +111,5 @@ def get_credentials(credentials_path: str = None,
         except Exception as e:
             raise AuthenticationError(f"Failed to save token to {token_path}: {e}")
 
+    assert creds is not None
     return creds

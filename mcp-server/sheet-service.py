@@ -28,7 +28,7 @@ Sheet names containing ':', '!', spaces, or "'" must be single-quoted:
 import json
 import os
 import sys
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
@@ -62,7 +62,7 @@ class MCPSheetsServer:
     """MCP server exposing the unified six-verb grammar over Google Sheets."""
 
     def __init__(self):
-        self.client: SheetsClient | None = None
+        self.client: Optional[SheetsClient] = None
 
     def initialize(self):
         if self.client is None:

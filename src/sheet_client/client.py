@@ -2,7 +2,7 @@
 
 import time
 from enum import IntFlag
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -36,8 +36,8 @@ class SheetsClient:
                    (defaults to ~/.sheet-cli/token.pickle)
     """
 
-    def __init__(self, credentials_path: str = None,
-                 token_path: str = None):
+    def __init__(self, credentials_path: Optional[str] = None,
+                 token_path: Optional[str] = None):
         """Initialize the Sheets client with OAuth credentials.
 
         Args:
@@ -543,7 +543,7 @@ class SheetsClient:
 
         return files
 
-    def create(self, title: str, sheets: List[dict] = None) -> dict:
+    def create(self, title: str, sheets: Optional[List[dict]] = None) -> dict:
         """Create a new spreadsheet.
 
         Args:
@@ -619,7 +619,7 @@ class SheetsClient:
                 ]
             )
         """
-        body = {
+        body: Dict[str, Any] = {
             'properties': {
                 'title': title
             }

@@ -1,5 +1,7 @@
 """Custom exceptions for Google Sheets CLI."""
 
+from typing import Any, Optional
+
 
 class SheetsClientError(Exception):
     """Base exception for all Sheets client errors."""
@@ -14,7 +16,8 @@ class AuthenticationError(SheetsClientError):
 class SheetsAPIError(SheetsClientError):
     """Raised when Google Sheets API returns an error."""
 
-    def __init__(self, message: str, status_code: int = None, response: dict = None):
+    def __init__(self, message: str, status_code: Optional[int] = None,
+                 response: Optional[Any] = None):
         super().__init__(message)
         self.status_code = status_code
         self.response = response
