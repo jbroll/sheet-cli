@@ -59,7 +59,7 @@ def _parse_target(s: str) -> Target:
         return Target(None, None, None)
     if parsed.spreadsheet_id is None:
         raise GrammarError(f"first operand must include a spreadsheet ID: {s!r}")
-    return Target(parsed.spreadsheet_id, parsed.sheet, parsed.locator)
+    return Target(parsed.spreadsheet_id, parsed.sheet, parsed.locator, parsed.property)
 
 
 def _parse_second(s: str, parent: Target) -> Target:
@@ -76,6 +76,11 @@ def _print_json(obj: Any) -> None:
 
 def _emit_get(target: Target, response: Any, as_json: bool) -> None:
     tt = classify(target)
+
+    # Properties return arbitrary dicts — always JSON.
+    if target.property is not None:
+        _print_json(response)
+        return
 
     # DRIVE and SPREADSHEET are always JSON (deeply nested structure).
     if tt in (TargetType.DRIVE, TargetType.SPREADSHEET):
@@ -156,7 +161,9 @@ def cmd_del(args):
 def cmd_new(args):
     client = SheetsClient()
     target = _parse_target(args.target or "")
-    response = verbs.do_new(client, target, side=args.side)
+    # Property collections (e.g. `.conditional`, `.named`) take a body from stdin.
+    data = _read_data_from_stdin() if target.property is not None else None
+    response = verbs.do_new(client, target, side=args.side, data=data)
     # new always echoes — the user needs the new ID/properties.
     _print_json(response)
 
@@ -215,7 +222,7 @@ def cmd_auth(args):
         if "Credentials file not found" in msg:
             print(_CREDENTIALS_SETUP, file=sys.stderr)
         sys.exit(1)
-    print("Authentication successful. Token cached at ~/.sheet-cli/token.pickle")
+    print("Authentication successful. Token cached at ~/.sheet-cli/token.json")
 
 
 # --------------------------------- main -----------------------------------

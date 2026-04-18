@@ -4,7 +4,7 @@ Guidance for Claude Code when working with this repository.
 
 ## Project Context
 
-**Google Sheets CLI** - Minimal Python wrapper for Google Sheets REST API v4. Provides direct API access with OAuth 2.0 authentication. Approximately 300 lines of code.
+**Google Sheets CLI** - Minimal Python wrapper for Google Sheets REST API v4. Provides direct API access with OAuth 2.0 authentication.
 
 **Status**: Implemented and ready for use.
 
@@ -49,6 +49,7 @@ sheet-cli/
 │       ├── grammar.py    # target-string grammar (parse/resolve/classify)
 │       ├── verbs.py      # get / put / del / new
 │       ├── dispatch.py   # copy / move with server-side optimizations
+│       ├── properties.py # property handlers (.format, .freeze, .named, …)
 │       └── formats.py    # stdin/stdout formatters
 │
 ├── mcp-server/           # MCP server exposing client to Claude Desktop
@@ -77,12 +78,33 @@ inherit from the first (e.g., `:Sheet2!A1` for same SID, different sheet).
 Output: `get` is text-first (use `--format=json` for API shape); mutations
 are silent (use `--format=json` to echo); `new` always prints JSON.
 
+### Properties — `TARGET.property`
+
+Any target may carry a `.property` suffix to address formatting, structure,
+or metadata of the resource. The same six verbs apply; property responses
+are always JSON. Collection elements are addressed by name (`named.NAME`)
+or index (`conditional[0]`).
+
+| Scope | Properties |
+|---|---|
+| spreadsheet | `title`, `named.NAME` |
+| sheet | `title`, `freeze`, `color`, `hidden`, `conditional[i]` |
+| range | `format`, `borders`, `merge`, `note`, `validation`, `protected` |
+| row | `height` |
+| column | `width` |
+
+Scalar sugar: `put .freeze "2 1"`, `put .color "#ff00aa"`, `put .title "New"`,
+`put .named.sales "Sheet1!A1:B100"`. Structured bodies (format, borders,
+validation, conditional rules) come from stdin as JSON matching the
+corresponding Sheets API request type. `copy` / `move` do not accept
+`.property` targets.
+
 ## How You Use This
 
 ### Pattern 1: Always Discover First
 
 Before making changes, get the complete state:
-- Use `get_spreadsheet()` to understand structure
+- Use `meta_read()` to understand structure
 - Analyze raw API response to check for existing data
 - Get sheet IDs needed for batch operations
 - Make informed decisions based on current state

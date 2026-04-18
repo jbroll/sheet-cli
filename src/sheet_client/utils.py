@@ -53,37 +53,92 @@ def index_to_column(index: int) -> str:
     return result
 
 
+# Column letters capped at 3 chars (Sheets max is "ZZZ" ≈ column 18278, well
+# above the 10,000-column sheet limit). Keeping the cap tight also means
+# obvious garbage like "InvalidNotation" still fails parsing.
+_A1_CELL_RE = re.compile(r'^([A-Z]{1,3})(\d+)$')
+_A1_COL_RE  = re.compile(r'^([A-Z]{1,3})$')
+_A1_ROW_RE  = re.compile(r'^(\d+)$')
+
+
+def _parse_a1_part(part: str) -> Dict[str, Optional[int]]:
+    """Parse one side of an A1 range into {col, row} zero-based indices.
+
+    Either component may be None for unbounded sides (e.g. 'A' has no row,
+    '5' has no column). Raises ValueError on unparseable input.
+    """
+    if not part:
+        return {'col': None, 'row': None}
+    m = _A1_CELL_RE.match(part)
+    if m:
+        return {'col': column_to_index(m.group(1)), 'row': int(m.group(2)) - 1}
+    m = _A1_COL_RE.match(part)
+    if m:
+        return {'col': column_to_index(m.group(1)), 'row': None}
+    m = _A1_ROW_RE.match(part)
+    if m:
+        return {'col': None, 'row': int(m.group(1)) - 1}
+    raise ValueError(f"Invalid A1 notation component: {part}")
+
+
 def a1_to_grid_range(a1_notation: str, sheet_id: int = 0) -> Dict:
     """Convert A1 notation to GridRange format for batch operations.
+
+    Supports single cells ('A1'), ranges ('A1:C10'), whole columns ('A:A',
+    'A:B'), whole rows ('1:5'), and partially-bounded forms ('A1:A', 'A:B10').
 
     Args:
         a1_notation: A1 notation like 'Sheet1!A1:C10' or 'A1:C10'
         sheet_id: Sheet ID (default 0)
 
     Returns:
-        GridRange dictionary with zero-based, half-open indices
+        GridRange dictionary with zero-based, half-open indices. Omits
+        startRowIndex/endRowIndex for whole-column refs and
+        startColumnIndex/endColumnIndex for whole-row refs.
 
     Examples:
         >>> a1_to_grid_range('A1:C10', 0)
         {'sheetId': 0, 'startRowIndex': 0, 'endRowIndex': 10, 'startColumnIndex': 0, 'endColumnIndex': 3}
-        >>> a1_to_grid_range('Sheet1!A1:C10', 0)
-        {'sheetId': 0, 'startRowIndex': 0, 'endRowIndex': 10, 'startColumnIndex': 0, 'endColumnIndex': 3}
+        >>> a1_to_grid_range('A1', 0)
+        {'sheetId': 0, 'startRowIndex': 0, 'endRowIndex': 1, 'startColumnIndex': 0, 'endColumnIndex': 1}
+        >>> a1_to_grid_range('A:B', 0)
+        {'sheetId': 0, 'startColumnIndex': 0, 'endColumnIndex': 2}
+        >>> a1_to_grid_range('2:5', 0)
+        {'sheetId': 0, 'startRowIndex': 1, 'endRowIndex': 5}
     """
-    # Remove sheet name if present
     if '!' in a1_notation:
-        a1_notation = a1_notation.split('!')[1]
+        a1_notation = a1_notation.split('!', 1)[1]
+    a1 = a1_notation.upper().strip()
+    if not a1:
+        raise ValueError("Invalid A1 notation: empty")
 
-    # Parse A1 notation
-    match = re.match(r'^([A-Z]+)(\d+):([A-Z]+)(\d+)$', a1_notation.upper())
-    if not match:
+    if ':' in a1:
+        left, right = a1.split(':', 1)
+        start = _parse_a1_part(left)
+        end = _parse_a1_part(right)
+    else:
+        start = end = _parse_a1_part(a1)
+
+    result: Dict = {'sheetId': sheet_id}
+
+    # Row component: present if either side specifies a row. When only one
+    # side has it (e.g. 'A1:A'), mirror that value so both bounds are set.
+    s_row, e_row = start['row'], end['row']
+    row_lo = s_row if s_row is not None else e_row
+    row_hi = e_row if e_row is not None else s_row
+    if row_lo is not None and row_hi is not None:
+        result['startRowIndex'] = row_lo
+        result['endRowIndex'] = row_hi + 1  # exclusive
+
+    # Column component: same mirroring rule.
+    s_col, e_col = start['col'], end['col']
+    col_lo = s_col if s_col is not None else e_col
+    col_hi = e_col if e_col is not None else s_col
+    if col_lo is not None and col_hi is not None:
+        result['startColumnIndex'] = col_lo
+        result['endColumnIndex'] = col_hi + 1  # exclusive
+
+    if 'startRowIndex' not in result and 'startColumnIndex' not in result:
         raise ValueError(f"Invalid A1 notation: {a1_notation}")
 
-    start_col, start_row, end_col, end_row = match.groups()
-
-    return {
-        'sheetId': sheet_id,
-        'startRowIndex': int(start_row) - 1,  # Convert to 0-based
-        'endRowIndex': int(end_row),  # Exclusive end
-        'startColumnIndex': column_to_index(start_col),
-        'endColumnIndex': column_to_index(end_col) + 1  # Exclusive end
-    }
+    return result

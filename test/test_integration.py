@@ -52,9 +52,9 @@ class TestOAuthFlow:
         assert client.service is not None
 
         # Check if token was created in ~/.sheet-cli/
-        token_path = os.path.expanduser('~/.sheet-cli/token.pickle')
+        token_path = os.path.expanduser('~/.sheet-cli/token.json')
         assert os.path.exists(token_path), \
-            "~/.sheet-cli/token.pickle should be created after OAuth flow"
+            "~/.sheet-cli/token.json should be created after OAuth flow"
 
     def test_cached_token_reused(self, client):
         """Test that cached token is reused on subsequent runs."""

@@ -36,8 +36,34 @@ Sheet!A1                  inherits SID
 :Sheet                    inherits SID only
 ```
 
-Sheet names containing `:`, `!`, spaces, or `'` must be single-quoted:
+Sheet names containing `:`, `!`, spaces, `.`, or `'` must be single-quoted:
 `SID:'My Sheet'!A1`. Embedded `'` is doubled: `'Bob''s'!A1`.
+
+Any target may carry a `.property` suffix to address a property of the
+resource (format, freeze, named ranges, conditional rules, etc.):
+
+```
+SID.title                  spreadsheet title
+SID.named.sales            named range "sales" (keyed by name)
+SID:Sheet.freeze           frozen rows/cols on a sheet
+SID:Sheet.conditional[0]   a conditional-format rule by index
+SID:Sheet!A1:B2.format     cell format on a range
+SID:Sheet!5.height         row pixel height
+SID:Sheet!C.width          column pixel width
+```
+
+Supported properties by scope:
+
+| Scope | Properties |
+|---|---|
+| spreadsheet | `title`, `named.NAME` |
+| sheet | `title`, `freeze`, `color`, `hidden`, `conditional[i]` |
+| range | `format`, `borders`, `merge`, `note`, `validation`, `protected` |
+| row | `height` |
+| column | `width` |
+
+All six verbs apply uniformly to properties (where semantically meaningful).
+`copy` and `move` do not accept `.property` targets.
 
 ## Output rules
 
@@ -107,6 +133,24 @@ sheet-cli new SID:NewSheet                # add a sheet
 sheet-cli new SID:Sheet1!5 --side=above   # insert row above row 5
 sheet-cli new SID:Sheet1!C --side=left    # insert col left of C
 
+# Properties — format a range
+echo '{"backgroundColor":{"red":1.0}}' | sheet-cli put SID:Sheet1!A1:B2.format
+
+# Freeze 2 rows (scalar sugar: "rows" or "rows cols")
+sheet-cli put SID:Sheet1.freeze "2 1"
+
+# Rename a spreadsheet
+sheet-cli put SID.title "Q3 Report"
+
+# Add / update / delete a named range
+sheet-cli put SID.named.sales "Sheet1!A1:B100"
+sheet-cli del SID.named.sales
+
+# Inspect / append / remove conditional rules
+sheet-cli get SID:Sheet1.conditional
+echo '{"booleanRule":{...}}' | sheet-cli new SID:Sheet1.conditional
+sheet-cli del SID:Sheet1.conditional[0]
+
 # Copy / move (server-side when operands line up)
 sheet-cli copy SID:Sheet1!A1:B10 :Sheet2!D1       # same-SS → copyPaste
 sheet-cli copy SID1:Sheet1 SID2                   # cross-SS sheet → copyTo
@@ -152,7 +196,7 @@ Scales to thousands of cells in a single call.
 ## Authentication
 
 OAuth 2.0 desktop flow. Credentials at `~/.sheet-cli/credentials.json`,
-token cached at `~/.sheet-cli/token.pickle`. First run opens a browser;
+token cached at `~/.sheet-cli/token.json`. First run opens a browser;
 subsequent runs reuse and auto-refresh. Run `sheet-cli auth` to re-auth or
 switch accounts.
 

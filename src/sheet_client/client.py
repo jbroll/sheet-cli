@@ -12,7 +12,12 @@ from .exceptions import SheetsAPIError, RateLimitError, ServerError
 
 
 class CellData(IntFlag):
-    """Flags for specifying what data to fetch when reading."""
+    """Flags for ``read()``'s ``types`` parameter — what to fetch for each cell.
+
+    Combine with ``|``. VALUE/FORMULA are mutually informative (FORMULA returns
+    the formula string when present, the literal value otherwise); FORMAT/NOTE
+    require the heavier spreadsheets.get endpoint.
+    """
     VALUE = 1      # Cell values (numbers, strings, booleans)
     FORMULA = 2    # Formulas (=SUM(A:A))
     FORMAT = 4     # Formatting (colors, fonts, borders, number formats)
@@ -22,18 +27,13 @@ class CellData(IntFlag):
 class SheetsClient:
     """Minimal wrapper for Google Sheets REST API v4.
 
-    Provides four core operations:
-    1. read() - Read cell data
-    2. write() - Write cell data
-    3. meta_read() - Read spreadsheet metadata/structure
-    4. meta_write() - Modify spreadsheet metadata/structure
+    The spreadsheet ID is passed per-method, not at construction time — one
+    client talks to any spreadsheet the authenticated user can reach.
 
-    Args:
-        spreadsheet_id: The ID of the Google Spreadsheet
-        credentials_path: Path to OAuth client credentials JSON
-                         (defaults to ~/.sheet-cli/credentials.json)
-        token_path: Path to cached token file
-                   (defaults to ~/.sheet-cli/token.pickle)
+    Core methods: ``read`` / ``write`` / ``clear`` for cell values,
+    ``meta_read`` / ``meta_write`` for structure and formatting, and
+    ``list_spreadsheets`` / ``create`` / ``delete_spreadsheet`` /
+    ``copy_sheet_to`` for spreadsheet-level operations.
     """
 
     def __init__(self, credentials_path: Optional[str] = None,
@@ -43,31 +43,13 @@ class SheetsClient:
         Args:
             credentials_path: Path to OAuth client credentials JSON
                              (defaults to ~/.sheet-cli/credentials.json)
-            token_path: Path to cached token file
-                       (defaults to ~/.sheet-cli/token.pickle)
+            token_path: Path to cached token JSON file
+                       (defaults to ~/.sheet-cli/token.json)
         """
         creds = get_credentials(credentials_path, token_path)
         self.service = build('sheets', 'v4', credentials=creds)
         self.spreadsheets = self.service.spreadsheets()
         self.drive = build('drive', 'v3', credentials=creds)
-
-    def _get_spreadsheet_id(self, spreadsheet_id: str) -> str:
-        """Validate and return spreadsheet ID.
-
-        Args:
-            spreadsheet_id: Spreadsheet ID (required)
-
-        Returns:
-            Spreadsheet ID to use
-
-        Raises:
-            ValueError: If spreadsheet_id is None or empty
-        """
-        if not spreadsheet_id:
-            raise ValueError(
-                "spreadsheet_id is required. Pass spreadsheet_id parameter to method."
-            )
-        return spreadsheet_id
 
     def _execute_with_retry(self, request, max_retries: int = 3) -> Any:
         """Execute API request with exponential backoff for rate limits and server errors.
@@ -191,40 +173,33 @@ class SheetsClient:
                 ['Sheet1!A1:C10', 'Sheet2!B2:D5', 'Summary!A1']
             )
         """
-        # Get spreadsheet ID
-        sheet_id = self._get_spreadsheet_id(spreadsheet_id)
-
-        # Check if we need grid data (for FORMAT or NOTE)
+        # FORMAT or NOTE require the heavier spreadsheets.get endpoint.
         need_grid_data = bool(types & (CellData.FORMAT | CellData.NOTE))
 
         if need_grid_data:
-            # Use spreadsheets.get for full cell data
             request = self.spreadsheets.get(
-                spreadsheetId=sheet_id,
+                spreadsheetId=spreadsheet_id,
                 includeGridData=True,
                 ranges=ranges
             )
             return self._execute_with_retry(request)
+
+        value_render = 'FORMULA' if (types & CellData.FORMULA) else 'FORMATTED_VALUE'
+
+        if len(ranges) == 1:
+            request = self.spreadsheets.values().get(
+                spreadsheetId=spreadsheet_id,
+                range=ranges[0],
+                valueRenderOption=value_render
+            )
         else:
-            # Use values API for faster value-only reads
-            value_render = 'FORMULA' if (types & CellData.FORMULA) else 'FORMATTED_VALUE'
+            request = self.spreadsheets.values().batchGet(
+                spreadsheetId=spreadsheet_id,
+                ranges=ranges,
+                valueRenderOption=value_render
+            )
 
-            if len(ranges) == 1:
-                # Single range - use values.get
-                request = self.spreadsheets.values().get(
-                    spreadsheetId=sheet_id,
-                    range=ranges[0],
-                    valueRenderOption=value_render
-                )
-            else:
-                # Multiple ranges - use values.batchGet
-                request = self.spreadsheets.values().batchGet(
-                    spreadsheetId=sheet_id,
-                    ranges=ranges,
-                    valueRenderOption=value_render
-                )
-
-            return self._execute_with_retry(request)
+        return self._execute_with_retry(request)
 
     def write(self, spreadsheet_id: str, data: List[dict]) -> dict:
         """Write cell values in a single batched call.
@@ -274,15 +249,13 @@ class SheetsClient:
                 {'range': 'Sheet3!C10', 'values': [[7, 8, 9]]}
             ])
         """
-        sheet_id = self._get_spreadsheet_id(spreadsheet_id)
-
         value_data = [{'range': d['range'], 'values': d['values']} for d in data]
         body = {
             'valueInputOption': 'USER_ENTERED',
             'data': value_data,
         }
         request = self.spreadsheets.values().batchUpdate(
-            spreadsheetId=sheet_id,
+            spreadsheetId=spreadsheet_id,
             body=body,
         )
         return self._execute_with_retry(request)
@@ -305,9 +278,8 @@ class SheetsClient:
                 'clearedRanges': ['Sheet1!A1:B10', ...]
             }
         """
-        sheet_id = self._get_spreadsheet_id(spreadsheet_id)
         request = self.spreadsheets.values().batchClear(
-            spreadsheetId=sheet_id,
+            spreadsheetId=spreadsheet_id,
             body={'ranges': ranges},
         )
         return self._execute_with_retry(request)
@@ -368,11 +340,8 @@ class SheetsClient:
             for nr in meta.get('namedRanges', []):
                 print(f"{nr['name']}: {nr['range']}")
         """
-        # Get spreadsheet ID
-        sheet_id = self._get_spreadsheet_id(spreadsheet_id)
-
         request = self.spreadsheets.get(
-            spreadsheetId=sheet_id,
+            spreadsheetId=spreadsheet_id,
             includeGridData=False
         )
         return self._execute_with_retry(request)
@@ -487,12 +456,9 @@ class SheetsClient:
                 {'autoResizeDimensions': {...}}
             ])
         """
-        # Get spreadsheet ID
-        sheet_id = self._get_spreadsheet_id(spreadsheet_id)
-
         body = {'requests': requests}
         request = self.spreadsheets.batchUpdate(
-            spreadsheetId=sheet_id,
+            spreadsheetId=spreadsheet_id,
             body=body
         )
         return self._execute_with_retry(request)
@@ -664,6 +630,5 @@ class SheetsClient:
         Args:
             spreadsheet_id: Spreadsheet ID to delete
         """
-        sheet_id = self._get_spreadsheet_id(spreadsheet_id)
-        request = self.drive.files().delete(fileId=sheet_id)
+        request = self.drive.files().delete(fileId=spreadsheet_id)
         self._execute_with_retry(request)

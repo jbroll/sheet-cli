@@ -25,7 +25,7 @@ Dependencies:
 5. Enable both the **Google Sheets API** and **Google Drive API** in the console
 6. Run `sheet-cli auth` to authenticate (opens browser, caches token)
 
-Token cached to `~/.sheet-cli/token.pickle` and auto-refreshes. Re-run `sheet-cli auth` to switch accounts.
+Token cached to `~/.sheet-cli/token.json` and auto-refreshes. Re-run `sheet-cli auth` to switch accounts.
 
 **Security**: Credentials stored in `~/.sheet-cli/` with secure permissions (directory: 700, files: 600).
 
@@ -38,13 +38,13 @@ from sheet_client import SheetsClient, CellData
 
 client = SheetsClient(
     credentials_path: str = None,  # Defaults to ~/.sheet-cli/credentials.json
-    token_path: str = None         # Defaults to ~/.sheet-cli/token.pickle
+    token_path: str = None         # Defaults to ~/.sheet-cli/token.json
 )
 ```
 
 **Parameters:**
 - `credentials_path` - Path to OAuth client credentials JSON (defaults to `~/.sheet-cli/credentials.json`)
-- `token_path` - Path to save/load cached token (defaults to `~/.sheet-cli/token.pickle`)
+- `token_path` - Path to save/load cached token (defaults to `~/.sheet-cli/token.json`)
 
 **Behavior:**
 - First run opens browser for OAuth authorization
@@ -231,7 +231,8 @@ data = client.read('spreadsheet-id', ['Sheet1!1:1'])
 
 ## Method 2: write()
 
-Write values, formatting, or notes to cells.
+Write cell values (and formulas) in a single batched call. For formatting
+and notes, use `meta_write()` with `repeatCell` / `updateCells` requests.
 
 ```python
 def write(spreadsheet_id: str, data: List[dict]) -> dict
@@ -365,7 +366,7 @@ def meta_read(spreadsheet_id: str) -> dict
 
 **Use Cases:**
 - Get list of sheets
-- Get sheet IDs (needed for `structure()` operations)
+- Get sheet IDs (needed for `meta_write()` operations using GridRange)
 - Find named ranges
 - Check frozen rows/columns
 - Get sheet dimensions
@@ -691,11 +692,11 @@ Always include sheet name when using API methods.
 
 ### GridRange
 
-Low-level range format for `structure()` operations:
+Low-level range format for `meta_write()` operations:
 
 ```python
 {
-    'sheetId': 0,              # Get from metadata()
+    'sheetId': 0,              # Get from meta_read()
     'startRowIndex': 0,        # Zero-based, inclusive
     'endRowIndex': 10,         # Zero-based, exclusive (Python slicing)
     'startColumnIndex': 0,     # Zero-based, inclusive
@@ -713,8 +714,8 @@ Example - first row only:
 ### Sheet IDs
 
 Every sheet has an integer ID:
-- Get from `metadata()`: `data['sheets'][i]['properties']['sheetId']`
-- Required for all GridRange operations in `structure()`
+- Get from `meta_read()`: `data['sheets'][i]['properties']['sheetId']`
+- Required for all GridRange operations in `meta_write()`
 - Usually 0 for first sheet, but not guaranteed
 
 ### Color Format
@@ -745,7 +746,7 @@ Common colors:
 
 ### Number Formats
 
-Apply via `repeatCell` in `structure()`:
+Apply via `repeatCell` in `meta_write()`:
 
 ```python
 {

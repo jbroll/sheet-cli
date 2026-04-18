@@ -17,6 +17,7 @@ from .grammar import (
     TargetType,
     a1_range_for_locator,
     classify,
+    is_single_cell,
     render,
 )
 
@@ -71,6 +72,10 @@ def do_get(client: SheetsClient, target: Target) -> Any:
     - SHEET        → values.get response for the whole sheet
     - RANGE/ROW/COL→ values.get response for the locator
     """
+    if target.property is not None:
+        from . import properties
+        return properties.dispatch("get", client, target, None)
+
     tt = classify(target)
 
     if tt == TargetType.DRIVE:
@@ -101,6 +106,10 @@ def do_put(client: SheetsClient, target: Target, data: Any) -> Dict[str, Any]:
     - ``[[...]]``                   — bare 2D array (requires RANGE/ROW/COLUMN target)
     - scalar                        — single cell value (requires cell-shaped locator)
     """
+    if target.property is not None:
+        from . import properties
+        return properties.dispatch("put", client, target, data)
+
     tt = classify(target)
     if tt in (TargetType.DRIVE, TargetType.SPREADSHEET):
         raise GrammarError(f"put is not valid for {tt.value} targets")
@@ -128,7 +137,14 @@ def do_put(client: SheetsClient, target: Target, data: Any) -> Dict[str, Any]:
         values = data if data and isinstance(data[0], list) else [data]
         write_ops.append({"range": a1_range_for_locator(target), "values": values})
     else:
-        # scalar — target must resolve to a single cell
+        # scalar — target must resolve to a single cell; otherwise the caller
+        # probably expected the value to fill a range, but the API would
+        # silently drop it into the top-left cell only.
+        if not is_single_cell(target):
+            raise GrammarError(
+                "scalar put requires a single-cell target "
+                f"(got {tt.value} {target.locator!r}); pass a 2D list instead"
+            )
         write_ops.append({"range": a1_range_for_locator(target), "values": [[data]]})
 
     return client.write(target.spreadsheet_id, write_ops)
@@ -139,6 +155,10 @@ def do_put(client: SheetsClient, target: Target, data: Any) -> Dict[str, Any]:
 
 def do_del(client: SheetsClient, target: Target) -> Dict[str, Any]:
     """Delete or clear what's at the target."""
+    if target.property is not None:
+        from . import properties
+        return properties.dispatch("del", client, target, None)
+
     tt = classify(target)
 
     if tt == TargetType.DRIVE:
@@ -171,7 +191,13 @@ def do_del(client: SheetsClient, target: Target) -> Dict[str, Any]:
 # ------------------------------ new --------------------------------
 
 
-def do_new(client: SheetsClient, target: Target, *, side: Optional[str] = None) -> Dict[str, Any]:
+def do_new(
+    client: SheetsClient,
+    target: Target,
+    *,
+    side: Optional[str] = None,
+    data: Any = None,
+) -> Dict[str, Any]:
     """Create what the target describes.
 
     - DRIVE/SPREADSHEET: `new "Title"` or `new SID` treats the SID slot as a
@@ -179,7 +205,18 @@ def do_new(client: SheetsClient, target: Target, *, side: Optional[str] = None) 
     - SHEET: add a sheet with the given title.
     - ROW/COLUMN: insert a dimension adjacent to the locator. `side` is one of
       above/below (rows) or left/right (columns); defaults to below/right.
+    - .property: dispatches to the property handler; ``data`` carries the body
+      (e.g. a ConditionalFormatRule for ``new .conditional``).
     """
+    if target.property is not None:
+        from . import properties
+        return properties.dispatch("new", client, target, data)
+
+    # Non-property paths don't accept a body — make it explicit instead of
+    # silently discarding it.
+    if data is not None:
+        raise GrammarError("new on this target does not accept a stdin body")
+
     tt = classify(target)
 
     if tt in (TargetType.DRIVE, TargetType.SPREADSHEET):

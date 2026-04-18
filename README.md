@@ -6,7 +6,7 @@ Minimal Python wrapper for Google Sheets REST API v4. Provides direct access to 
 
 ## Description
 
-This package wraps the Google Sheets API v4 with minimal abstraction. All methods return raw Google API responses. The implementation consists of approximately 300 lines of Python code providing authenticated access to discovery, read, write, and batch operations.
+This package wraps the Google Sheets API v4 with minimal abstraction. All methods return raw Google API responses, providing authenticated access to discovery, read, write, and batch operations.
 
 The design provides no higher-level abstractions, helper functions, or opinionated interfaces. Users access the Google Sheets API directly through thin wrapper methods that handle authentication and retry logic.
 
@@ -19,10 +19,10 @@ The design provides no higher-level abstractions, helper functions, or opinionat
 - Utility functions for A1 notation conversion
 
 **What this provides:**
-- Discovery: `get_spreadsheet()` returns complete spreadsheet state
-- Read: Value retrieval methods with rendering options
-- Write: Value write and append operations
-- Batch: Direct access to `batch_update()` for structural/formatting operations
+- Discovery: `meta_read()` returns complete spreadsheet state
+- Read: Value retrieval with rendering options (values, formulas, formatting, notes)
+- Write: Batched value writes via `write()` and `clear()`
+- Batch: Direct access to `meta_write()` (spreadsheets.batchUpdate) for structural/formatting operations
 - Authentication: OAuth flow with token persistence
 
 ## Requirements
@@ -58,7 +58,7 @@ First run initiates OAuth flow:
 ```bash
 python your_script.py
 ```
-Browser opens for user authorization. Token cached to `~/.sheet-cli/token.pickle` for subsequent runs. Token auto-refreshes when expired.
+Browser opens for user authorization. Token cached to `~/.sheet-cli/token.json` for subsequent runs. Token auto-refreshes when expired.
 
 **Credential Storage**: All credentials are stored in `~/.sheet-cli/` with secure permissions (directory: 700, files: 600).
 
@@ -97,6 +97,32 @@ Sheet!A1                  inherit SID, use Sheet + A1
 :Sheet                    inherit SID, sheet-level target
 ```
 
+### Properties (`.property` suffix)
+
+Any target may carry a trailing `.property` to address formatting,
+structure, or metadata of the resource. The same six verbs apply:
+
+```
+SID.title                  spreadsheet title
+SID.named.sales            a named range (keyed by name)
+SID:Sheet.freeze           frozen rows / columns
+SID:Sheet.color            tab color
+SID:Sheet.hidden           visibility
+SID:Sheet.conditional[0]   conditional-format rule by index
+SID:Sheet!A1:B2.format     cell format for a range
+SID:Sheet!A1:B2.borders    borders
+SID:Sheet!A1:B2.merge      merges
+SID:Sheet!A1:B2.note       notes
+SID:Sheet!A1:B2.validation data validation
+SID:Sheet!A1:B2.protected  protected range
+SID:Sheet!5.height         row pixel height
+SID:Sheet!C.width          column pixel width
+```
+
+`copy` and `move` do not accept `.property` targets. Scalar sugar works
+for simple properties (`put .freeze "2 1"`, `put .color "#ff00aa"`,
+`put .title "New"`); structured request bodies come from stdin as JSON.
+
 ### Examples
 
 ```bash
@@ -133,6 +159,14 @@ sheet-cli copy SID1:Sheet1 SID2
 
 # Move a row
 sheet-cli move SID:Sheet1!5 !2
+
+# Properties
+sheet-cli put SID.title "Q3 Report"
+sheet-cli put SID:Sheet1.freeze "2 1"
+sheet-cli put SID:Sheet1.color "#ffcc00"
+echo '{"backgroundColor":{"red":1.0}}' | sheet-cli put SID:Sheet1!A1:B2.format
+sheet-cli put SID.named.sales "Sheet1!A1:B100"
+sheet-cli get SID:Sheet1.conditional
 ```
 
 ### Output rules
@@ -169,7 +203,7 @@ Range specification format. Examples: `Sheet1!A1:C10`, `Sheet1!A:A`, `Sheet1!1:1
 Low-level range format using zero-based indices with exclusive end values (Python slice semantics). Used in batch operations.
 
 **Sheet IDs:**
-Integer identifiers for sheets (not the same as sheet names). Required for GridRange operations. Retrieved from `get_spreadsheet()`.
+Integer identifiers for sheets (not the same as sheet names). Required for GridRange operations. Retrieved from `meta_read()`.
 
 **Value Rendering:**
 Options for how values are returned: FORMATTED_VALUE (default), UNFORMATTED_VALUE, FORMULA.
@@ -245,6 +279,7 @@ sheet-cli/
 │   └── sheet_cli/            # CLI layer
 │       ├── cli.py            # Six-verb argparse entry point
 │       ├── grammar.py        # Target-string grammar (parse/resolve/classify)
+│       ├── properties.py     # Property handler registry (.format, .freeze, …)
 │       ├── verbs.py          # get / put / del / new dispatch
 │       ├── dispatch.py       # copy / move with server-side optimizations
 │       ├── formats.py        # stdin/stdout formatters

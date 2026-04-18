@@ -119,6 +119,81 @@ class TestA1ToGridRange:
         assert result['startColumnIndex'] == 0
         assert result['endColumnIndex'] == 1
 
+    def test_single_cell_shorthand(self):
+        """'A1' on its own should work as a 1x1 range."""
+        result = a1_to_grid_range('A1', sheet_id=7)
+        assert result == {
+            'sheetId': 7,
+            'startRowIndex': 0, 'endRowIndex': 1,
+            'startColumnIndex': 0, 'endColumnIndex': 1,
+        }
+
+    def test_whole_column(self):
+        """'A:A' should omit row bounds."""
+        result = a1_to_grid_range('A:A', sheet_id=0)
+        assert result == {
+            'sheetId': 0,
+            'startColumnIndex': 0, 'endColumnIndex': 1,
+        }
+        assert 'startRowIndex' not in result
+        assert 'endRowIndex' not in result
+
+    def test_multi_column(self):
+        """'B:D' should span three columns, no row bounds."""
+        result = a1_to_grid_range('B:D', sheet_id=0)
+        assert result == {
+            'sheetId': 0,
+            'startColumnIndex': 1, 'endColumnIndex': 4,
+        }
+
+    def test_whole_row_range(self):
+        """'2:5' should span four rows, no column bounds."""
+        result = a1_to_grid_range('2:5', sheet_id=0)
+        assert result == {
+            'sheetId': 0,
+            'startRowIndex': 1, 'endRowIndex': 5,
+        }
+        assert 'startColumnIndex' not in result
+
+    def test_single_row(self):
+        """'3:3' should be a single row with no column bounds."""
+        result = a1_to_grid_range('3:3', sheet_id=0)
+        assert result == {
+            'sheetId': 0,
+            'startRowIndex': 2, 'endRowIndex': 3,
+        }
+
+    def test_partial_bounds_row_mirrored(self):
+        """'A1:C' mirrors the row from the bounded side."""
+        result = a1_to_grid_range('A1:C', sheet_id=0)
+        # Only the left side had a row, so both row bounds collapse to 1.
+        assert result['startRowIndex'] == 0
+        assert result['endRowIndex'] == 1
+        assert result['startColumnIndex'] == 0
+        assert result['endColumnIndex'] == 3
+
+    def test_partial_bounds_column_extended(self):
+        """'A:B10' mirrors the row on the left side."""
+        result = a1_to_grid_range('A:B10', sheet_id=0)
+        assert result['startRowIndex'] == 9
+        assert result['endRowIndex'] == 10
+        assert result['startColumnIndex'] == 0
+        assert result['endColumnIndex'] == 2
+
+    def test_lowercase_accepted(self):
+        """Lowercase should be normalized."""
+        result = a1_to_grid_range('a1:b2', sheet_id=0)
+        assert result == {
+            'sheetId': 0,
+            'startRowIndex': 0, 'endRowIndex': 2,
+            'startColumnIndex': 0, 'endColumnIndex': 2,
+        }
+
+    def test_empty_notation_raises(self):
+        """Empty string should raise."""
+        with pytest.raises(ValueError):
+            a1_to_grid_range('', sheet_id=0)
+
 
 class TestExceptions:
     """Test custom exceptions."""

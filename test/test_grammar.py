@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 from sheet_cli.grammar import (
     GrammarError,
     ParsedTarget,
+    PropertyRef,
     Target,
     TargetType,
     a1_range_for_locator,
@@ -235,6 +236,117 @@ class TestA1RangeForLocator:
     def test_no_locator_no_sheet_errors(self):
         with pytest.raises(GrammarError):
             a1_range_for_locator(Target("SID", None, None))
+
+
+class TestPropertyParse:
+    def test_spreadsheet_property(self):
+        assert parse("SID.title") == ParsedTarget(
+            spreadsheet_id="SID", property=PropertyRef("title")
+        )
+
+    def test_sheet_property(self):
+        assert parse("SID:Sheet1.freeze") == ParsedTarget(
+            spreadsheet_id="SID", sheet="Sheet1",
+            property=PropertyRef("freeze"),
+        )
+
+    def test_range_property(self):
+        assert parse("SID:Sheet1!A1:B2.format") == ParsedTarget(
+            spreadsheet_id="SID", sheet="Sheet1", locator="A1:B2",
+            property=PropertyRef("format"),
+        )
+
+    def test_row_property(self):
+        assert parse("SID:Sheet1!5.height") == ParsedTarget(
+            spreadsheet_id="SID", sheet="Sheet1", locator="5",
+            property=PropertyRef("height"),
+        )
+
+    def test_col_property(self):
+        assert parse("SID:Sheet1!C.width") == ParsedTarget(
+            spreadsheet_id="SID", sheet="Sheet1", locator="C",
+            property=PropertyRef("width"),
+        )
+
+    def test_collection_by_key_dot(self):
+        assert parse("SID.named.sales") == ParsedTarget(
+            spreadsheet_id="SID",
+            property=PropertyRef("named", "sales"),
+        )
+
+    def test_collection_by_key_bracket(self):
+        assert parse("SID:Sheet1.conditional[0]") == ParsedTarget(
+            spreadsheet_id="SID", sheet="Sheet1",
+            property=PropertyRef("conditional", "0"),
+        )
+
+    def test_collection_key_with_dot_uses_brackets(self):
+        assert parse("SID.named[sales.2024]") == ParsedTarget(
+            spreadsheet_id="SID",
+            property=PropertyRef("named", "sales.2024"),
+        )
+
+    def test_bare_property_is_error(self):
+        with pytest.raises(GrammarError):
+            parse(".title")
+
+    def test_empty_key_after_dot_is_error(self):
+        with pytest.raises(GrammarError):
+            parse("SID.named.")
+
+    def test_empty_key_in_brackets_is_error(self):
+        with pytest.raises(GrammarError):
+            parse("SID.named[]")
+
+
+class TestPropertyRender:
+    def test_plain(self):
+        assert PropertyRef("title").render() == "title"
+
+    def test_dotted_key(self):
+        assert PropertyRef("named", "sales").render() == "named.sales"
+
+    def test_numeric_key_uses_brackets(self):
+        assert PropertyRef("conditional", "0").render() == "conditional[0]"
+
+    def test_dotted_value_uses_brackets(self):
+        assert PropertyRef("named", "sales.2024").render() == "named[sales.2024]"
+
+    def test_full_target_round_trip(self):
+        target = Target("SID", "Sheet1", "A1:B2",
+                        property=PropertyRef("format"))
+        assert render(target) == "SID:Sheet1!A1:B2.format"
+
+    def test_collection_round_trip(self):
+        target = Target("SID", None, None,
+                        property=PropertyRef("named", "sales"))
+        assert render(target) == "SID.named.sales"
+
+
+class TestPropertyResolve:
+    def test_property_carried_through_resolve(self):
+        parent = Target("SID", "Sheet1", None)
+        child = parse(":Sheet2.freeze")
+        resolved = resolve(parent, child)
+        assert resolved.property == PropertyRef("freeze")
+        assert resolved.sheet == "Sheet2"
+
+    def test_classify_ignores_property(self):
+        # Properties don't change the resource type.
+        t = Target("SID", "Sheet1", None, property=PropertyRef("freeze"))
+        assert classify(t) == TargetType.SHEET
+
+
+class TestQuotedSheetWithDot:
+    def test_sheet_with_dot_must_be_quoted_to_avoid_property(self):
+        # 'My.Sheet' — quoted, so the dot is part of the sheet name.
+        assert parse("SID:'My.Sheet'!A1") == ParsedTarget(
+            spreadsheet_id="SID", sheet="My.Sheet", locator="A1"
+        )
+
+    def test_sheet_with_dot_round_trip_quoted(self):
+        t = Target("SID", "My.Sheet", "A1")
+        assert render(t) == "SID:'My.Sheet'!A1"
 
 
 if __name__ == "__main__":

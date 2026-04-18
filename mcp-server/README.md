@@ -46,7 +46,7 @@ First run opens a browser for OAuth consent:
 ./mcp-server/sheet-service.sh
 ```
 
-After auth, `~/.sheet-cli/token.pickle` is cached (mode 600). Ctrl+C to exit.
+After auth, `~/.sheet-cli/token.json` is cached (mode 600). Ctrl+C to exit.
 
 ## Claude Desktop config
 
@@ -154,16 +154,16 @@ Format row 1 of Sheet1 with bold text and a light gray background
 ## Authentication flow
 
 1. First run: browser OAuth consent.
-2. Token cached in `~/.sheet-cli/token.pickle` (user-only, mode 600).
+2. Token cached in `~/.sheet-cli/token.json` (user-only, mode 600).
 3. Subsequent runs reuse and auto-refresh the token.
-4. Re-auth: delete `token.pickle` and restart, or run `venv/bin/sheet-cli auth`.
+4. Re-auth: delete `token.json` and restart, or run `venv/bin/sheet-cli auth`.
 
 ## Troubleshooting
 
 - **"credentials.json not found"** — place it at `~/.sheet-cli/credentials.json`.
 - **"Module not found"** — `venv/bin/pip install -r requirements.txt` from project root.
 - **"Permission denied" on a sheet** — your account must have access; OAuth scopes include Sheets + Drive.
-- **Token expired** — delete `token.pickle` and re-auth.
+- **Token expired** — delete `token.json` and re-auth.
 
 ## Testing
 

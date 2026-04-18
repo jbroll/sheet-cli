@@ -42,6 +42,9 @@ def _grid_range(client: SheetsClient, target: Target) -> Dict[str, Any]:
 
 
 def do_copy(client: SheetsClient, source: Target, dest: Target) -> Dict[str, Any]:
+    if source.property is not None or dest.property is not None:
+        raise GrammarError("copy does not support .property targets")
+
     src_type = classify(source)
     dst_type = classify(dest)
 
@@ -85,6 +88,9 @@ def do_copy(client: SheetsClient, source: Target, dest: Target) -> Dict[str, Any
 
 
 def do_move(client: SheetsClient, source: Target, dest: Target) -> Dict[str, Any]:
+    if source.property is not None or dest.property is not None:
+        raise GrammarError("move does not support .property targets")
+
     src_type = classify(source)
     dst_type = classify(dest)
 

@@ -110,6 +110,20 @@ class TestDoPut:
         with pytest.raises(GrammarError):
             do_put(client, Target("SID", None, None), {"A1": 1})
 
+    def test_scalar_on_range_rejected(self, client):
+        """Scalar writes to a multi-cell range would silently land in the
+        top-left cell only — refuse and tell the caller to pass a 2D list."""
+        with pytest.raises(GrammarError):
+            do_put(client, Target("SID", "Sheet1", "A1:B2"), "hello")
+
+    def test_scalar_on_row_rejected(self, client):
+        with pytest.raises(GrammarError):
+            do_put(client, Target("SID", "Sheet1", "5"), "hello")
+
+    def test_scalar_on_column_rejected(self, client):
+        with pytest.raises(GrammarError):
+            do_put(client, Target("SID", "Sheet1", "C"), "hello")
+
 
 # =============================== do_del ===================================
 
