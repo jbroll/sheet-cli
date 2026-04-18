@@ -21,6 +21,9 @@ setup(
     package_dir={'': 'src'},
     python_requires='>=3.8',
     install_requires=requirements,
+    extras_require={
+        'test': ['pytest>=7.0'],
+    },
     entry_points={
         'console_scripts': [
             'sheet-cli=sheet_cli.cli:main',

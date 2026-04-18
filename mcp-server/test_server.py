@@ -1,137 +1,132 @@
 #!/usr/bin/env python3
-"""Test script for MCP server.
+"""Smoke tests for the v2 MCP server.
 
-This script tests the MCP server by sending JSON-RPC requests and verifying responses.
+Starts sheet-service.py as a subprocess, sends JSON-RPC requests over
+stdio, and verifies the tool catalog + error paths. No Google API calls.
 """
 
 import json
+import os
 import subprocess
 import sys
-import time
+
+
+SERVER_PATH = os.path.join(os.path.dirname(__file__), "sheet-service.py")
+VENV_PYTHON = os.path.join(os.path.dirname(__file__), "..", "venv", "bin", "python")
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
+EXPECTED_TOOLS = [
+    "sheets_get",
+    "sheets_put",
+    "sheets_del",
+    "sheets_new",
+    "sheets_copy",
+    "sheets_move",
+    "sheets_batch_update",
+]
 
 
 def send_request(process, request):
-    """Send a JSON-RPC request to the server and return the response."""
-    request_json = json.dumps(request) + "\n"
-    process.stdin.write(request_json)
+    line = json.dumps(request) + "\n"
+    process.stdin.write(line)
     process.stdin.flush()
-
-    # Read response
-    response_line = process.stdout.readline()
-
-    # Debug: print what we got
-    if not response_line.strip():
-        # Check stderr for errors
-        stderr_output = process.stderr.read()
-        if stderr_output:
-            print(f"   Server stderr: {stderr_output}")
-        raise Exception("Got empty response from server")
-
-    return json.loads(response_line)
+    response = process.stdout.readline()
+    if not response.strip():
+        err = process.stderr.read()
+        raise RuntimeError(f"empty response; stderr:\n{err}")
+    return json.loads(response)
 
 
 def test_mcp_server():
-    """Test the MCP server with basic requests."""
     print("Starting MCP server test...")
 
-    # Start the server
-    server_path = "/home/john/src/sheet-cli/mcp-server/server.py"
-    venv_python = "/home/john/src/sheet-cli/venv/bin/python"
     process = subprocess.Popen(
-        [venv_python, server_path],
+        [VENV_PYTHON, SERVER_PATH],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         bufsize=1,
-        cwd="/home/john/src/sheet-cli"  # Run from project root for credentials
+        cwd=PROJECT_ROOT,
     )
 
-    # Give server time to start
-    time.sleep(0.5)
-
     try:
-        # Test 1: Initialize
-        print("\n1. Testing initialize...")
-        init_request = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {},
-                "clientInfo": {
-                    "name": "test-client",
-                    "version": "1.0.0"
-                }
-            }
-        }
-        response = send_request(process, init_request)
-        assert "result" in response, f"Initialize failed: {response}"
+        # 1. initialize
+        print("\n1. initialize...")
+        response = send_request(process, {
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2024-11-05",
+                       "capabilities": {},
+                       "clientInfo": {"name": "test", "version": "1.0.0"}},
+        })
+        assert "result" in response, f"initialize failed: {response}"
         assert response["result"]["protocolVersion"] == "2024-11-05"
-        print("   ✓ Initialize successful")
+        assert response["result"]["serverInfo"]["version"] == "2.0.0"
+        print("   \u2713 ok")
 
-        # Test 2: List tools
-        print("\n2. Testing tools/list...")
-        tools_request = {
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "tools/list",
-            "params": {}
-        }
-        response = send_request(process, tools_request)
-        assert "result" in response, "Tools list failed"
+        # 2. tools/list
+        print("\n2. tools/list...")
+        response = send_request(process, {
+            "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {},
+        })
+        assert "result" in response, f"tools/list failed: {response}"
         tools = response["result"]["tools"]
-        assert len(tools) == 4, f"Expected 4 tools, got {len(tools)}"
+        names = [t["name"] for t in tools]
+        assert names == EXPECTED_TOOLS, (
+            f"expected tools {EXPECTED_TOOLS}, got {names}"
+        )
+        for t in tools:
+            assert "description" in t and t["description"]
+            assert "inputSchema" in t
+        print(f"   \u2713 {len(tools)} tools: {', '.join(names)}")
 
-        tool_names = [t["name"] for t in tools]
-        expected_tools = ["read_cells", "write_cells", "read_metadata", "write_metadata"]
-        for expected in expected_tools:
-            assert expected in tool_names, f"Missing tool: {expected}"
-        print(f"   ✓ Found all 4 tools: {', '.join(tool_names)}")
-
-        # Test 3: Invalid method
-        print("\n3. Testing invalid method...")
-        invalid_request = {
-            "jsonrpc": "2.0",
-            "id": 3,
-            "method": "invalid_method",
-            "params": {}
-        }
-        response = send_request(process, invalid_request)
-        assert "error" in response, "Expected error for invalid method"
+        # 3. unknown method
+        print("\n3. unknown method...")
+        response = send_request(process, {
+            "jsonrpc": "2.0", "id": 3, "method": "does_not_exist", "params": {},
+        })
+        assert "error" in response
         assert response["error"]["code"] == -32601
-        print("   ✓ Invalid method handled correctly")
+        print("   \u2713 method not found")
 
-        print("\n✅ All tests passed!")
+        # 4. tools/call unknown tool → -32603
+        print("\n4. tools/call unknown tool...")
+        response = send_request(process, {
+            "jsonrpc": "2.0", "id": 4, "method": "tools/call",
+            "params": {"name": "nope", "arguments": {}},
+        })
+        assert "error" in response
+        assert response["error"]["code"] == -32603
+        print("   \u2713 internal error")
+
+        # 5. grammar error → -32602
+        print("\n5. grammar error...")
+        response = send_request(process, {
+            "jsonrpc": "2.0", "id": 5, "method": "tools/call",
+            "params": {"name": "sheets_get", "arguments": {"target": "SID:Sheet!@@@"}},
+        })
+        assert "error" in response, f"expected error, got {response}"
+        assert response["error"]["code"] == -32602
+        print("   \u2713 grammar error routed")
+
+        print("\n\u2705 All tests passed!")
+        return True
 
     except AssertionError as e:
-        print(f"\n❌ Test failed: {e}")
-        # Print any stderr output
-        stderr_data = process.stderr.read()
-        if stderr_data:
-            print(f"Server stderr:\n{stderr_data}")
+        print(f"\n\u274c Test failed: {e}")
+        stderr = process.stderr.read()
+        if stderr:
+            print(f"stderr:\n{stderr}")
         return False
     except Exception as e:
-        print(f"\n❌ Unexpected error: {e}")
+        print(f"\n\u274c Unexpected: {e}")
         import traceback
         traceback.print_exc()
-        # Print any stderr output
-        try:
-            stderr_data = process.stderr.read()
-            if stderr_data:
-                print(f"Server stderr:\n{stderr_data}")
-        except:
-            pass
         return False
     finally:
-        # Clean up
         process.terminate()
-        process.wait()
-
-    return True
+        process.wait(timeout=5)
 
 
 if __name__ == "__main__":
-    success = test_mcp_server()
-    sys.exit(0 if success else 1)
+    sys.exit(0 if test_mcp_server() else 1)

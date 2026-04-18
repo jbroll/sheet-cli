@@ -62,96 +62,98 @@ Browser opens for user authorization. Token cached to `~/.sheet-cli/token.pickle
 
 **Credential Storage**: All credentials are stored in `~/.sheet-cli/` with secure permissions (directory: 700, files: 600).
 
-## Usage
+## CLI Usage
 
-### Basic Operations
+The CLI exposes six verbs over a unified target grammar:
 
-Initialize client with spreadsheet ID from URL:
-```bash
-# Spreadsheet URL: https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/edit
-# Use SPREADSHEET_ID in code
+```
+sheet-cli get    TARGET            read cell / range / sheet / spreadsheet / drive
+sheet-cli put    TARGET [VALUE]    write cells (scalar sugar or stdin)
+sheet-cli del    TARGET            clear range / delete sheet / row / col / spreadsheet
+sheet-cli new    [TARGET]          create spreadsheet / sheet / row / col
+sheet-cli copy   SOURCE DEST       copy (server-side when possible)
+sheet-cli move   SOURCE DEST       move (server-side when possible)
+sheet-cli auth                     run OAuth flow
 ```
 
-Read spreadsheet structure:
-```bash
-# Returns sheet names, IDs, properties, optionally cell data
+### Target grammar
+
+```
+SID                       whole spreadsheet
+SID:Sheet                 a sheet
+SID:Sheet!A1:B10          a range within a sheet
+SID:Sheet!A1              a single cell
+SID:Sheet!5               row 5 of the sheet
+SID:Sheet!C               column C of the sheet
+SID:!A1                   range in the first/default sheet
 ```
 
-Read cell values:
-```bash
-# Specify range in A1 notation: Sheet1!A1:C10
-# Returns 2D list of values
+For the second operand of `copy` / `move`, any part may be omitted and
+inherited from the first operand:
+
+```
+Sheet!A1                  inherit SID, use Sheet + A1
+!A1                       inherit SID AND sheet, use A1
+:Sheet                    inherit SID, sheet-level target
 ```
 
-Write cell values:
+### Examples
+
 ```bash
-# Specify starting cell and 2D value array
-# Formulas parsed when using USER_ENTERED mode
+# List spreadsheets in Drive
+sheet-cli get
+
+# Full spreadsheet metadata
+sheet-cli get SID
+
+# A single cell (text output; use --format=json for raw API shape)
+sheet-cli get SID:Sheet1!A1
+
+# Scalar write (sugar)
+sheet-cli put SID:Sheet1!A1 "hello world"
+
+# Batch write from stdin (JSON or cell-value text — auto-detected)
+echo '{"A1": "hello", "B1": 42}' | sheet-cli put SID:Sheet1
+
+# Clear a range / delete a row / delete a sheet
+sheet-cli del SID:Sheet1!A1:C10
+sheet-cli del SID:Sheet1!5
+sheet-cli del SID:Sheet1
+
+# Create
+sheet-cli new "My New Spreadsheet"        # prints new SID
+sheet-cli new SID:NewSheet                # add a sheet
+sheet-cli new SID:Sheet1!5 --side=above   # insert a row
+
+# Copy a range within the same spreadsheet (server-side)
+sheet-cli copy SID:Sheet1!A1:B10 :Sheet2!D1
+
+# Copy a whole sheet across spreadsheets (server-side via sheets.copyTo)
+sheet-cli copy SID1:Sheet1 SID2
+
+# Move a row
+sheet-cli move SID:Sheet1!5 !2
 ```
 
-Append to sheet:
-```bash
-# Appends after last row with data in specified column range
-```
+### Output rules
 
-### Batch Operations
-
-Format cells:
-```bash
-# Apply colors, fonts, alignment, borders to ranges
-# Use repeatCell request type
-```
-
-Modify structure:
-```bash
-# Freeze rows/columns with updateSheetProperties
-# Add/delete sheets with addSheet/deleteSheet
-# Insert/delete rows/columns with insertDimension/deleteDimension
-```
-
-Auto-resize columns:
-```bash
-# Automatically adjust column widths to fit content
-```
-
-Conditional formatting:
-```bash
-# Add rules with conditions and formatting
-# Types: number comparisons, text matches, custom formulas
-```
-
-### Advanced Features
-
-Multiple range reads:
-```bash
-# Read from multiple ranges in single API call
-# Returns dict with valueRanges list
-```
-
-Formula handling:
-```bash
-# Write: Formulas (starting with =) parsed in USER_ENTERED mode
-# Read: Use FORMULA value_render to get formula strings
-```
-
-Merge cells:
-```bash
-# Merge ranges using mergeCells request
-# Unmerge with unmergeCells request
-```
+- `get` prints cell/value text by default; `--format=json` emits the raw API response.
+- Mutations (`put`, `del`, `copy`, `move`) are silent by default; `--format=json` echoes the target and response.
+- `new` always emits JSON (the new SID / sheet properties are the point).
 
 ## API Methods
 
 Complete API reference in API.md:
-- `SheetsClient.__init__()` - Initialize with OAuth
-- `get_spreadsheet()` - Discovery method
-- `read_values()` - Single range read
-- `batch_get_values()` - Multiple range read
-- `write_values()` - Overwrite range
-- `append_values()` - Append after data
-- `clear_values()` - Clear range
-- `batch_update_values()` - Multiple range write
-- `batch_update()` - Structural/formatting operations
+- `SheetsClient.__init__(credentials_path=None, token_path=None)` - Initialize with OAuth
+- `read(spreadsheet_id, ranges, types=CellData.VALUE)` - Read cells (supports VALUE / FORMULA / FORMAT / NOTE flags)
+- `write(spreadsheet_id, data)` - Batch value writes (list of `{range, values}` dicts)
+- `clear(spreadsheet_id, ranges)` - Clear cell values in one or more ranges
+- `meta_read(spreadsheet_id)` - Read spreadsheet metadata/structure
+- `meta_write(spreadsheet_id, requests)` - Raw batchUpdate for formatting/structure
+- `create(title, sheets=None)` - Create a new spreadsheet
+- `copy_sheet_to(source_id, source_sheet_id, dest_id)` - Server-side sheet copy between spreadsheets
+- `delete_spreadsheet(spreadsheet_id)` - Delete a spreadsheet via Drive API
+- `list_spreadsheets(include_shared_drives=False)` - List spreadsheets via Drive API
 
 Utility functions:
 - `column_to_index()` - Convert column letters to indices
@@ -234,24 +236,36 @@ Integration tests require real spreadsheet and are optional.
 ```
 sheet-cli/
 ├── src/
-│   ├── client.py         # SheetsClient implementation
-│   ├── auth.py           # OAuth flow
-│   ├── utils.py          # A1 notation utilities
-│   ├── exceptions.py     # Custom exceptions
-│   └── __init__.py       # Package exports
-├── example/              # Usage examples
-├── test/                 # Unit tests
-├── API.md                # Complete API reference
-├── CLAUDE.md             # Claude Code guidance
-├── README.md             # This file
-├── requirements.txt      # Python dependencies
-└── .gitignore           # Excludes credentials, tokens
+│   ├── sheet_client/         # Library (Python API)
+│   │   ├── client.py         # SheetsClient
+│   │   ├── auth.py           # OAuth flow
+│   │   ├── utils.py          # A1 notation utilities
+│   │   ├── exceptions.py     # Custom exceptions
+│   │   └── __init__.py       # Package exports
+│   └── sheet_cli/            # CLI layer
+│       ├── cli.py            # Six-verb argparse entry point
+│       ├── grammar.py        # Target-string grammar (parse/resolve/classify)
+│       ├── verbs.py          # get / put / del / new dispatch
+│       ├── dispatch.py       # copy / move with server-side optimizations
+│       ├── formats.py        # stdin/stdout formatters
+│       └── __main__.py       # `python -m sheet_cli`
+├── mcp-server/               # MCP server exposing client to Claude Desktop
+├── example/                  # Usage examples
+├── test/                     # Unit, mock, and integration tests
+├── API.md                    # Complete API reference
+├── CLAUDE.md                 # Claude Code guidance
+├── README.md                 # This file
+├── requirements.txt          # Python dependencies
+├── requirements-dev.txt      # Dev dependencies (pytest)
+└── .gitignore                # Excludes credentials, tokens
 ```
 
 ## Documentation
 
+- **llms.txt** - Concise agent-facing reference (grammar, dispatch table, bulk-write patterns)
 - **API.md** - Complete technical reference with method signatures, parameters, return values, and code examples
 - **CLAUDE.md** - Guidance for Claude Code usage patterns
+- **TESTING.md** - Test layout and how to run the suite
 - **Google Sheets API v4** - [Official documentation](https://developers.google.com/sheets/api)
 - **OAuth 2.0** - [Desktop app flow](https://developers.google.com/identity/protocols/oauth2/native-app)
 

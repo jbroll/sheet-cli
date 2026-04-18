@@ -1,343 +1,183 @@
-"""CLI command handlers."""
+"""Unified sheet-cli — six-verb grammar over Google Sheets & Drive.
+
+Verbs:
+    get    TARGET                read a cell / range / sheet / spreadsheet / drive
+    put    TARGET [VALUE]        write cells; VALUE is scalar sugar, else stdin
+    del    TARGET                clear a range / delete sheet / spreadsheet / row / col
+    new    [TARGET] [--side ...] create a spreadsheet / sheet / row / col
+    copy   SOURCE DEST           copy (server-side where possible)
+    move   SOURCE DEST           move (server-side where possible)
+
+    auth                         OAuth login
+    help                         detailed grammar reference
+
+Target grammar:
+    SID[:Sheet[!locator]]
+    Sheet!locator              (inherit SID from first operand)
+    !locator                   (inherit SID and sheet)
+    :Sheet                     (inherit SID)
+
+Output rules:
+    get        → text (cell/value pairs) by default; --format=json for API shape
+    put/del/
+    copy/move  → silent; --format=json echoes the target string
+    new        → always JSON (the new SID or sheet properties matter)
+"""
+
+from __future__ import annotations
 
 import argparse
 import json
 import sys
-from typing import List, Dict, Any
+from pathlib import Path
+from typing import Any, Optional
 
-from sheet_client import SheetsClient, CellData
+from sheet_client import SheetsClient
 from sheet_client.auth import get_credentials
-from sheet_client.exceptions import SheetsClientError, AuthenticationError
-from . import formats
+from sheet_client.exceptions import AuthenticationError, SheetsClientError
 
-def _resolve_sheet_id(client, spreadsheet_id, sheet_ref):
-    # Numeric sheetId passed directly
-    if sheet_ref.isdigit():
-        return int(sheet_ref)
-
-    # Otherwise resolve by sheet title
-    meta = client.meta_read(spreadsheet_id)
-    for sheet in meta.get("sheets", []):
-        props = sheet.get("properties", {})
-        if props.get("title") == sheet_ref:
-            return props.get("sheetId")
-
-    raise SheetsClientError(f"Sheet not found: {sheet_ref}")
+from . import dispatch, formats, verbs
+from .grammar import (
+    GrammarError,
+    Target,
+    TargetType,
+    classify,
+    parse,
+    render,
+    resolve,
+)
 
 
-def cmd_read(args):
-    """Read values from specified cells/ranges.
+# ----------------------------- target parsing -----------------------------
 
-    Outputs cell/value pairs (default) or Sheets API v4 JSON (--json).
-    """
+
+def _parse_target(s: str) -> Target:
+    """Parse a first-operand target (no inheritance)."""
+    parsed = parse(s)
+    # First operand must have a SID (unless it's the empty DRIVE target).
+    if parsed.is_empty:
+        return Target(None, None, None)
+    if parsed.spreadsheet_id is None:
+        raise GrammarError(f"first operand must include a spreadsheet ID: {s!r}")
+    return Target(parsed.spreadsheet_id, parsed.sheet, parsed.locator)
+
+
+def _parse_second(s: str, parent: Target) -> Target:
+    """Parse a second-operand target, inheriting components from parent."""
+    return resolve(parent, parse(s))
+
+
+# ----------------------------- output formatting ----------------------------
+
+
+def _print_json(obj: Any) -> None:
+    print(json.dumps(obj, indent=2, default=str))
+
+
+def _emit_get(target: Target, response: Any, as_json: bool) -> None:
+    tt = classify(target)
+
+    # DRIVE and SPREADSHEET are always JSON (deeply nested structure).
+    if tt in (TargetType.DRIVE, TargetType.SPREADSHEET):
+        _print_json(response)
+        return
+
+    if as_json:
+        _print_json(response)
+        return
+
+    # Text: flatten value ranges into cell/value pairs.
+    value_ranges = _normalize_value_ranges(response)
+    flat = {}
+    for range_str, values in value_ranges:
+        flat.update(formats.expand_range_to_cells(range_str, values))
+    if flat:
+        print(formats.format_cell_value_pairs(flat))
+
+
+def _normalize_value_ranges(response):
+    if isinstance(response, dict):
+        if "valueRanges" in response:
+            return [(vr.get("range", ""), vr.get("values", [])) for vr in response["valueRanges"]]
+        if "values" in response or "range" in response:
+            return [(response.get("range", ""), response.get("values", []))]
+    return []
+
+
+def _emit_mutation(target: Target, response: Any, as_json: bool) -> None:
+    if not as_json:
+        return
+    _print_json({"target": render(target), "response": response})
+
+
+# ----------------------------- stdin helpers -------------------------------
+
+
+def _read_data_from_stdin() -> Optional[Any]:
+    text = formats.read_stdin()
+    if not text:
+        return None
+    return formats.parse_input(text)
+
+
+# --------------------------------- verbs -----------------------------------
+
+
+def cmd_get(args):
     client = SheetsClient()
+    target = _parse_target(args.target or "")
+    response = verbs.do_get(client, target)
+    _emit_get(target, response, args.format == "json")
 
-    # Get metadata if needed (for --json or if no ranges specified)
-    metadata = None
-    if not args.ranges or getattr(args, 'json', False):
-        metadata = client.meta_read(args.spreadsheet_id)
 
-    # If no ranges specified, read all sheets
-    if not args.ranges:
-        # Build list of sheet names to read
-        sheet_names = [sheet['properties']['title'] for sheet in metadata.get('sheets', [])]
+def cmd_put(args):
+    client = SheetsClient()
+    target = _parse_target(args.target)
 
-        if not sheet_names:
-            print("No sheets found in spreadsheet", file=sys.stderr)
+    if args.value is not None:
+        data: Any = args.value
+    else:
+        data = _read_data_from_stdin()
+        if data is None:
+            print("put: no value given and no stdin", file=sys.stderr)
             sys.exit(1)
 
-        # Use sheet names as ranges (reads all data from each sheet)
-        args.ranges = sheet_names
-
-    # Read all ranges
-    response = client.read(args.spreadsheet_id, args.ranges, types=CellData.VALUE | CellData.FORMULA)
-
-    # Output format: JSON (Sheets API v4) or text (cell/value pairs)
-    if getattr(args, 'json', False):
-        # Sheets API v4 format
-        sheets_data = {}
-
-        # Handle single range vs multiple ranges
-        if 'values' in response:
-            # Single range response
-            range_str = response['range']
-            values = response.get('values', [])
-            # Extract sheet name from range (e.g., "Sheet1!A1:B10" -> "Sheet1")
-            sheet_name = range_str.split('!')[0].strip("'\"") if '!' in range_str else 'Sheet1'
-            sheets_data[sheet_name] = {
-                'range': range_str.split('!')[1] if '!' in range_str else range_str,
-                'values': values
-            }
-        elif 'valueRanges' in response:
-            # Multiple ranges response
-            for value_range in response['valueRanges']:
-                range_str = value_range['range']
-                values = value_range.get('values', [])
-                # Extract sheet name
-                sheet_name = range_str.split('!')[0].strip("'\"") if '!' in range_str else 'Sheet1'
-                sheets_data[sheet_name] = {
-                    'range': range_str.split('!')[1] if '!' in range_str else range_str,
-                    'values': values
-                }
-
-        # Build Sheets API v4 output
-        output = {
-            'spreadsheetId': args.spreadsheet_id,
-            'spreadsheetUrl': f'https://docs.google.com/spreadsheets/d/{args.spreadsheet_id}/edit',
-            'title': metadata['properties']['title'] if metadata else '',
-            'sheets': sheets_data
-        }
-        print(json.dumps(output, indent=2))
-    else:
-        # Text format (original behavior)
-        result = {}
-
-        # Handle single range vs multiple ranges
-        if 'values' in response:
-            # Single range response
-            range_str = response['range']
-            values = response.get('values', [])
-            cell_values = formats.expand_range_to_cells(range_str, values)
-            result.update(cell_values)
-        elif 'valueRanges' in response:
-            # Multiple ranges response
-            for value_range in response['valueRanges']:
-                range_str = value_range['range']
-                values = value_range.get('values', [])
-                cell_values = formats.expand_range_to_cells(range_str, values)
-                result.update(cell_values)
-
-        # Output as cell/value pairs
-        output = formats.format_cell_value_pairs(result)
-        print(output)
+    response = verbs.do_put(client, target, data)
+    _emit_mutation(target, response, args.format == "json")
 
 
-def cmd_write(args):
-    """Write cells with values from command line or stdin.
-
-    From command line: alternating cell/range and value pairs.
-    From stdin: space-delimited or JSON format.
-    """
+def cmd_del(args):
     client = SheetsClient()
-
-    # Check if we have command line cell/value pairs
-    if args.cell_value_pairs:
-        # Parse alternating cell value pairs from command line
-        if len(args.cell_value_pairs) % 2 != 0:
-            print("Error: Must provide alternating cell/range and value pairs", file=sys.stderr)
-            sys.exit(1)
-
-        data = {}
-        for i in range(0, len(args.cell_value_pairs), 2):
-            cell = args.cell_value_pairs[i]
-            value = args.cell_value_pairs[i + 1]
-            data[cell] = value
-    else:
-        # Read input from stdin
-        input_text = formats.read_stdin()
-        if not input_text:
-            print("Error: No input provided. Use command line args or pipe data to stdin.", file=sys.stderr)
-            sys.exit(1)
-
-        # Parse input (auto-detect format)
-        data = formats.parse_input(input_text)
-
-    # Convert to write operations
-    write_ops = []
-
-    if isinstance(data, dict):
-        # Check if it's range-based (JSON with ranges as keys)
-        # or cell-based (space-delimited format)
-        for key, value in data.items():
-            if isinstance(value, list) and all(isinstance(v, list) for v in value):
-                # Range-based: value is 2D array
-                write_ops.append({
-                    'range': key,
-                    'values': value
-                })
-            else:
-                # Cell-based: single cell with value
-                write_ops.append({
-                    'range': key,
-                    'values': [[value]]
-                })
-
-    # Execute write
-    result = client.write(args.spreadsheet_id, write_ops)
-
-    # Output result summary
-    if 'totalUpdatedCells' in result:
-        print(f"Updated {result['totalUpdatedCells']} cells", file=sys.stderr)
+    target = _parse_target(args.target)
+    response = verbs.do_del(client, target)
+    _emit_mutation(target, response, args.format == "json")
 
 
-def cmd_structure(args):
-    """Execute structure operations from JSON stdin.
-
-    Reads raw batch request JSON from stdin.
-    """
+def cmd_new(args):
     client = SheetsClient()
-
-    # Read JSON from stdin
-    input_text = formats.read_stdin()
-    if not input_text:
-        print("Error: No input provided. Pipe JSON to stdin.", file=sys.stderr)
-        sys.exit(1)
-
-    # Parse JSON
-    try:
-        data = json.loads(input_text)
-    except json.JSONDecodeError as e:
-        print(f"Error: Invalid JSON: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    # Extract requests array
-    if isinstance(data, dict) and 'requests' in data:
-        requests = data['requests']
-    elif isinstance(data, list):
-        requests = data
-    else:
-        print("Error: Expected JSON with 'requests' array or array of requests", file=sys.stderr)
-        sys.exit(1)
-
-    # Execute structure operations
-    result = client.meta_write(args.spreadsheet_id, requests)
-
-    # Output result as JSON
-    print(json.dumps(result, indent=2))
-
-
-def cmd_metadata(args):
-    """Get spreadsheet metadata.
-
-    Outputs metadata as JSON.
-    """
-    client = SheetsClient()
-    result = client.meta_read(args.spreadsheet_id)
-    print(json.dumps(result, indent=2))
+    target = _parse_target(args.target or "")
+    response = verbs.do_new(client, target, side=args.side)
+    # new always echoes — the user needs the new ID/properties.
+    _print_json(response)
 
 
 def cmd_copy(args):
-    """Copy a range from one spreadsheet to another.
-
-    Copies formulas by default. Use --value to copy computed values only.
-    The destination is the top-left anchor cell; the full range is
-    determined by the size of the source data.
-    """
     client = SheetsClient()
-
-    # Parse positional args: 3 = same sheet, 4 = different sheets
-    if len(args.copy_args) == 3:
-        source_id, source_range, dest_range = args.copy_args
-        dest_id = source_id
-    elif len(args.copy_args) == 4:
-        source_id, source_range, dest_id, dest_range = args.copy_args
-    else:
-        print("Error: copy requires 3 or 4 arguments: SOURCE_ID SOURCE_RANGE [DEST_ID] DEST_RANGE",
-              file=sys.stderr)
-        sys.exit(1)
-
-    # Read source — formula render preserves =... strings; value render flattens them
-    read_types = CellData.VALUE if args.value else CellData.VALUE | CellData.FORMULA
-    response = client.read(source_id, [source_range], types=read_types)
-
-    # Extract 2D values array from response
-    if 'values' in response:
-        values = response['values']
-    elif 'valueRanges' in response:
-        values = response['valueRanges'][0].get('values', [])
-    else:
-        values = []
-
-    if not values:
-        print("Source range is empty.", file=sys.stderr)
-        sys.exit(1)
-
-    # Write to destination anchor — API expands from top-left
-    client.write(dest_id, [{'range': dest_range, 'values': values}])
-
-    rows = len(values)
-    cols = max(len(row) for row in values)
-    print(f"Copied {rows}x{cols} cells to {dest_id} {dest_range}")
+    source = _parse_target(args.source)
+    dest = _parse_second(args.dest, source)
+    response = dispatch.do_copy(client, source, dest)
+    _emit_mutation(dest, response, args.format == "json")
 
 
-def cmd_insert(args):
-    """Insert a row or column left/right of a given index."""
+def cmd_move(args):
     client = SheetsClient()
+    source = _parse_target(args.source)
+    dest = _parse_second(args.dest, source)
+    response = dispatch.do_move(client, source, dest)
+    _emit_mutation(dest, response, args.format == "json")
 
-    sheet_id = _resolve_sheet_id(
-        client,
-        args.spreadsheet_id,
-        args.sheet_ref
-    )
 
-    # Determine whether this is a row (number) or column (letter)
-    ref = args.ref
-    side = args.side
-
-    requests = []
-
-    if ref.isdigit():
-        # Row insertion (1-based → 0-based)
-        index = int(ref) - 1
-        insert_index = index if side == "above" else index + 1
-
-        requests.append({
-            "insertDimension": {
-                "range": {
-                    "sheetId": sheet_id,
-                    "dimension": "ROWS",
-                    "startIndex": insert_index,
-                    "endIndex": insert_index + 1,
-                },
-                "inheritFromBefore": side == "right",
-            }
-        })
-
-    else:
-        # Column insertion (A, B, AA… → 0-based)
-        col = ref.upper()
-        index = 0
-        for c in col:
-            index = index * 26 + (ord(c) - ord('A') + 1)
-        index -= 1
-
-        insert_index = index if side == "left" else index + 1
-
-        requests.append({
-            "insertDimension": {
-                "range": {
-                    "sheetId": sheet_id,
-                    "dimension": "COLUMNS",
-                    "startIndex": insert_index,
-                    "endIndex": insert_index + 1,
-                },
-                "inheritFromBefore": side == "right",
-            }
-        })
-
-    client.meta_write(args.spreadsheet_id, requests)
-
-def cmd_list(args):
-    """List spreadsheets from Google Drive.
-
-    Outputs a table of spreadsheets (ID, name, modified date) by default,
-    or raw JSON with --json.
-    """
-    client = SheetsClient()
-    files = client.list_spreadsheets(include_shared_drives=args.shared)
-
-    if not files:
-        print("No spreadsheets found.")
-        return
-
-    if getattr(args, 'json', False):
-        print(json.dumps(files, indent=2))
-    else:
-        for f in files:
-            modified = f.get('modifiedTime', '')[:10]  # YYYY-MM-DD
-            name = f.get('name', '')
-            fid = f.get('id', '')
-            print(f"{fid}  {modified}  {name}")
+# --------------------------------- auth -----------------------------------
 
 
 _CREDENTIALS_SETUP = """
@@ -354,184 +194,107 @@ To set up authentication:
 """
 
 
-def cmd_auth(args):
-    """Authenticate with Google and cache the token.
+def _find_llms_txt() -> Path:
+    for parent in Path(__file__).resolve().parents:
+        candidate = parent / "llms.txt"
+        if candidate.is_file():
+            return candidate
+    raise FileNotFoundError("llms.txt not found")
 
-    Forces a fresh OAuth flow, useful after scope changes or to switch accounts.
-    """
+
+def cmd_help(_args=None):
+    sys.stdout.write(_find_llms_txt().read_text())
+
+
+def cmd_auth(args):
     try:
         get_credentials(force_reauth=True)
     except AuthenticationError as e:
         msg = str(e)
-        if 'Credentials file not found' in msg:
-            print(f"Error: {msg}", file=sys.stderr)
+        print(f"Error: {msg}", file=sys.stderr)
+        if "Credentials file not found" in msg:
             print(_CREDENTIALS_SETUP, file=sys.stderr)
-        else:
-            print(f"Error: {msg}", file=sys.stderr)
         sys.exit(1)
     print("Authentication successful. Token cached at ~/.sheet-cli/token.pickle")
 
 
-def cmd_create(args):
-    """Create a new spreadsheet.
-
-    Outputs result as JSON including spreadsheet ID and URL.
-    """
-    client = SheetsClient()
-
-    # Check if sheets config provided via stdin
-    sheets = None
-    if not sys.stdin.isatty():
-        input_text = formats.read_stdin()
-        if input_text:
-            try:
-                data = json.loads(input_text)
-                if isinstance(data, dict) and 'sheets' in data:
-                    sheets = data['sheets']
-                elif isinstance(data, list):
-                    sheets = data
-            except json.JSONDecodeError as e:
-                print(f"Error: Invalid JSON: {e}", file=sys.stderr)
-                sys.exit(1)
-
-    result = client.create(args.title, sheets=sheets)
-    print(json.dumps(result, indent=2))
+# --------------------------------- main -----------------------------------
 
 
 def main():
-    """Main CLI entry point."""
     parser = argparse.ArgumentParser(
-        prog='sheet-cli',
-        description='Google Sheets CLI - minimal wrapper for Sheets API v4',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Create a new spreadsheet
-  sheet-cli create "My Spreadsheet"
-
-  # Create with custom sheets (from stdin JSON)
-  echo '[{"properties": {"title": "Sales"}}]' | sheet-cli create "My Report"
-
-  # Read entire spreadsheet (all sheets)
-  sheet-cli read SHEET_ID
-
-  # Read with Sheets API v4 JSON output (for analysis tools)
-  sheet-cli read --json SHEET_ID > data.json
-
-  # Read multiple cells/ranges
-  sheet-cli read SHEET_ID A1 A2 B1:B10 Sheet2!C1:C5
-
-  # Write cells from command line (alternating cell value pairs)
-  sheet-cli write SHEET_ID A1 "hello world" A2 123 A3 "=SUM(A1:A2)"
-
-  # Write cells from stdin (space-delimited)
-  echo 'A1 hello world
-  A2 123
-  A3 =SUM(A1:A2)' | sheet-cli write SHEET_ID
-
-  # Write cells from stdin (JSON)
-  echo '{"A1": "hello", "A2": 123}' | sheet-cli write SHEET_ID
-
-  # Write metadata (batch API structure operations)
-  echo '{"requests": [...]}' | sheet-cli meta_write SHEET_ID
-
-  # Read metadata
-  sheet-cli meta_read SHEET_ID
-"""
+        prog="sheet-cli",
+        description="Google Sheets & Drive — unified six-verb CLI.",
+        add_help=False,
     )
-
-    subparsers = parser.add_subparsers(dest='command', help='Command to execute')
-    subparsers.required = True
-
-    # Read command
-    parser_read = subparsers.add_parser('read', help='Read cell values')
-    parser_read.add_argument('spreadsheet_id', help='Spreadsheet ID')
-    parser_read.add_argument('ranges', nargs='*', help='Cell or range (A1, A1:B10, Sheet1!A1). If omitted, reads all sheets.')
-    parser_read.add_argument('--json', action='store_true', help='Output in Sheets API v4 JSON format (compatible with analysis tools)')
-    parser_read.set_defaults(func=cmd_read)
-
-    # Write command
-    parser_write = subparsers.add_parser('write', help='Write cell values')
-    parser_write.add_argument('spreadsheet_id', help='Spreadsheet ID')
-    parser_write.add_argument('cell_value_pairs', nargs='*', help='Alternating cell/range and value pairs')
-    parser_write.set_defaults(func=cmd_write)
-
-    # meta_write command (was: structure)
-    parser_meta_write = subparsers.add_parser('meta_write', help='Write metadata (batch API structure operations) from JSON stdin')
-    parser_meta_write.add_argument('spreadsheet_id', help='Spreadsheet ID')
-    parser_meta_write.set_defaults(func=cmd_structure)
-
-    # meta_read command (was: metadata)
-    parser_meta_read = subparsers.add_parser('meta_read', help='Read spreadsheet metadata')
-    parser_meta_read.add_argument('spreadsheet_id', help='Spreadsheet ID')
-    parser_meta_read.set_defaults(func=cmd_metadata)
-
-    # create command
-    parser_create = subparsers.add_parser('create', help='Create a new spreadsheet')
-    parser_create.add_argument('title', help='Spreadsheet title')
-    parser_create.set_defaults(func=cmd_create)
-
-    # copy command
-    parser_copy = subparsers.add_parser('copy', help='Copy a range between spreadsheets',
-                                        description='Copy a range from one spreadsheet to another. '
-                                                    'Formulas are preserved by default. '
-                                                    'The destination is the top-left anchor cell.')
-    parser_copy.add_argument('copy_args', nargs='+',
-                             metavar='arg',
-                             help='SOURCE_ID SOURCE_RANGE DEST_RANGE  '
-                                  '(same spreadsheet) or  '
-                                  'SOURCE_ID SOURCE_RANGE DEST_ID DEST_RANGE  '
-                                  '(different spreadsheets)')
-    parser_copy.add_argument('--value', action='store_true',
-                             help='Copy computed values only, not formulas')
-    parser_copy.set_defaults(func=cmd_copy)
-
-
-    parser_insert = subparsers.add_parser(
-        'insert',
-        help='Insert a row or column left|right|above|below of a reference'
+    parser.add_argument(
+        "-h", "--help", action="store_true", dest="show_help",
+        help="show full reference and exit",
     )
-    parser_insert.add_argument('spreadsheet_id', help='Spreadsheet ID')
-    parser_insert.add_argument(
-        'sheet_ref',
-        type=str,
-        help='Sheet ID (numeric, not sheet name)'
-    )
-    parser_insert.add_argument(
-        'ref',
-        help='Row number (e.g. 5) or column letter (e.g. C, AA)'
-    )
-    parser_insert.add_argument(
-        'side',
-        choices=['left', 'right', 'above', 'below'],
-        help='Insert to the left/right (columns) or above/below (rows)'
-    )
-    parser_insert.set_defaults(func=cmd_insert)
+    sub = parser.add_subparsers(dest="command", required=False)
 
+    def add_format(p):
+        p.add_argument("--format", choices=["text", "json"], default="text",
+                       help="output format (default: text where applicable)")
 
-    # list command
-    parser_list = subparsers.add_parser('list', help='List spreadsheets from Google Drive',
-                                        description='List spreadsheets visible to the authenticated user. '
-                                                    'Outputs ID, modified date, and name. '
-                                                    'Use the ID with other sheet-cli commands.')
-    parser_list.add_argument('--shared', action='store_true',
-                             help='Include files from Shared Drives (team/org drives)')
-    parser_list.add_argument('--json', action='store_true',
-                             help='Output raw JSON instead of text table')
-    parser_list.set_defaults(func=cmd_list)
+    p_get = sub.add_parser("get", help="read cells / metadata / drive listing")
+    p_get.add_argument("target", nargs="?", default="",
+                       help="target string; omit for Drive-level listing")
+    add_format(p_get)
+    p_get.set_defaults(func=cmd_get)
 
-    # auth command
-    parser_auth = subparsers.add_parser('auth', help='Authenticate and cache OAuth token')
-    parser_auth.set_defaults(func=cmd_auth)
+    p_put = sub.add_parser("put", help="write cells (scalar sugar or stdin)")
+    p_put.add_argument("target", help="target string (cell, range, or sheet)")
+    p_put.add_argument("value", nargs="?", default=None,
+                       help="optional scalar value; omit to read stdin")
+    add_format(p_put)
+    p_put.set_defaults(func=cmd_put)
 
-    # Parse args and execute
+    p_del = sub.add_parser("del", help="clear or delete target")
+    p_del.add_argument("target", help="target string")
+    add_format(p_del)
+    p_del.set_defaults(func=cmd_del)
+
+    p_new = sub.add_parser("new", help="create spreadsheet / sheet / row / column")
+    p_new.add_argument("target", nargs="?", default="",
+                       help="title or target string; omit for untitled spreadsheet")
+    p_new.add_argument("--side", choices=["above", "below", "left", "right"],
+                       default=None, help="for row/column targets")
+    p_new.set_defaults(func=cmd_new)
+
+    p_copy = sub.add_parser("copy", help="copy source to dest (server-side when possible)")
+    p_copy.add_argument("source", help="source target")
+    p_copy.add_argument("dest", help="destination target (components inherit from source)")
+    add_format(p_copy)
+    p_copy.set_defaults(func=cmd_copy)
+
+    p_move = sub.add_parser("move", help="move source to dest (server-side when possible)")
+    p_move.add_argument("source", help="source target")
+    p_move.add_argument("dest", help="destination target (components inherit from source)")
+    add_format(p_move)
+    p_move.set_defaults(func=cmd_move)
+
+    p_auth = sub.add_parser("auth", help="run OAuth flow and cache token")
+    p_auth.set_defaults(func=cmd_auth)
+
+    p_help = sub.add_parser("help", help="show full reference and exit")
+    p_help.set_defaults(func=lambda _a: cmd_help())
+
     args = parser.parse_args()
+
+    if args.show_help or args.command is None:
+        cmd_help()
+        return
+
     try:
         args.func(args)
+    except GrammarError as e:
+        print(f"grammar error: {e}", file=sys.stderr)
+        sys.exit(2)
     except SheetsClientError as e:
-        print(f"Error: {e}", file=sys.stderr)
+        print(f"error: {e}", file=sys.stderr)
         sys.exit(1)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

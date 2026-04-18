@@ -1,6 +1,8 @@
 # API Reference
 
-Complete technical reference for Google Sheets CLI - simplified 4-method API.
+Complete technical reference for the `sheet_client` library. Thin wrapper
+over Google Sheets API v4 and Google Drive API v3 — all methods return raw
+API responses.
 
 ## Installation
 
@@ -56,12 +58,15 @@ client = SheetsClient(
 |--------|-------------|
 | `list_spreadsheets(include_shared_drives)` | List spreadsheets from Google Drive |
 | `read(spreadsheet_id, ranges, types)` | Read cell data |
-| `write(spreadsheet_id, data)` | Write cell data |
+| `write(spreadsheet_id, data)` | Write cell data (batch) |
+| `clear(spreadsheet_id, ranges)` | Clear cell values (preserves formatting/notes) |
 | `meta_read(spreadsheet_id)` | Read metadata/structure |
-| `meta_write(spreadsheet_id, requests)` | Write metadata/structure |
+| `meta_write(spreadsheet_id, requests)` | Write metadata/structure (batchUpdate) |
 | `create(title, sheets)` | Create a new spreadsheet |
+| `copy_sheet_to(source_id, source_sheet_id, dest_id)` | Server-side sheet copy across spreadsheets |
+| `delete_spreadsheet(spreadsheet_id)` | Delete a spreadsheet via Drive API |
 
-All methods except `list_spreadsheets` require `spreadsheet_id` as the first parameter.
+All per-spreadsheet methods require `spreadsheet_id` as the first parameter.
 
 ## CellData Flags
 
@@ -237,11 +242,12 @@ def write(spreadsheet_id: str, data: List[dict]) -> dict
 - `spreadsheet_id` - Spreadsheet ID (required)
 - `data` - List of write operations
 
-Each dict can have:
+Each dict must have:
 - `'range'` - A1 notation (required)
-- `'values'` - 2D array for value/formula writes
-- `'format'` - Format dict for formatting writes (not yet implemented)
-- `'note'` - String for note writes (not yet implemented)
+- `'values'` - 2D array for value/formula writes (required)
+
+For formatting or notes, use `meta_write()` with `repeatCell` / `updateCells` requests.
+To clear values, use `clear()`.
 
 **Returns:**
 
@@ -257,9 +263,9 @@ Each dict can have:
 
 **Behavior:**
 - Formulas starting with `=` are automatically parsed
-- Clear values with `values=[[]]` or `values=[['']]`
 - Multiple operations batched in single API call
-- Values written in USER_ENTERED mode (formulas parsed)
+- Values written in USER_ENTERED mode (formulas and dates parsed)
+- To clear values, call `clear()` instead
 
 **Examples:**
 
@@ -290,10 +296,7 @@ client.write('spreadsheet-id', [
 ])
 
 # Clear values
-client.write('spreadsheet-id', [{
-    'range': 'Sheet1!A1:C10',
-    'values': [[]]
-}])
+client.clear('spreadsheet-id', ['Sheet1!A1:C10'])
 ```
 
 **"Appending" Pattern:**
@@ -314,10 +317,10 @@ client.write('spreadsheet-id', [{
 ```
 
 **Notes:**
-- Format and note writes not yet implemented (use `meta_write()` for formatting)
+- Use `meta_write()` for formatting, notes, merges, and other structural writes
 - All value writes use USER_ENTERED input mode
 - Formulas must start with `=`
-- Empty arrays clear values
+- Use `clear()` to clear values; empty `values` arrays are not supported as a clear mechanism
 
 ## Method 3: meta_read()
 
@@ -915,9 +918,50 @@ if 'sheets' in data:
                         print(f"Formula at [{row_idx},{col_idx}]: {uev['formulaValue']}")
 ```
 
+## copy_sheet_to()
+
+Server-side copy of a whole sheet between spreadsheets using `spreadsheets.sheets.copyTo`. Data never leaves Google's infrastructure.
+
+```python
+def copy_sheet_to(
+    source_spreadsheet_id: str,
+    source_sheet_id: int,
+    destination_spreadsheet_id: str,
+) -> dict
+```
+
+**Parameters:**
+- `source_spreadsheet_id` — spreadsheet containing the source sheet
+- `source_sheet_id` — numeric sheetId (not title) of the source sheet
+- `destination_spreadsheet_id` — target spreadsheet
+
+**Returns:** new sheet's properties (title, sheetId, index, gridProperties).
+
+**Example:**
+```python
+meta = client.meta_read(source_id)
+sheet_id = meta['sheets'][0]['properties']['sheetId']
+client.copy_sheet_to(source_id, sheet_id, dest_id)
+```
+
+---
+
+## delete_spreadsheet()
+
+Delete a spreadsheet via the Drive API (moves it to trash).
+
+```python
+def delete_spreadsheet(spreadsheet_id: str) -> None
+```
+
+Used by `sheet-cli del SID` at the spreadsheet level.
+
+---
+
 ## See Also
 
 - [Google Sheets API v4 Documentation](https://developers.google.com/sheets/api)
 - [OAuth 2.0 for Desktop Apps](https://developers.google.com/identity/protocols/oauth2/native-app)
 - Example scripts in `example/` directory
 - CLAUDE.md for Claude Code usage patterns
+- README.md for the `sheet-cli` command-line grammar

@@ -1,0 +1,161 @@
+# sheet-cli
+
+> Google Sheets / Drive CLI. Six verbs (`get put del new copy move`) over a
+> unified `SID:Sheet!locator` target grammar.
+
+## Quick reference
+
+```
+sheet-cli get    TARGET            read cell / range / sheet / spreadsheet / drive
+sheet-cli put    TARGET [VALUE]    write cells (scalar sugar, else stdin)
+sheet-cli del    TARGET            clear range / delete sheet / row / col / spreadsheet
+sheet-cli new    [TARGET]          create spreadsheet / sheet / row / column
+sheet-cli copy   SOURCE DEST       copy (server-side when possible)
+sheet-cli move   SOURCE DEST       move (server-side when possible)
+sheet-cli auth                     run OAuth flow (cache token)
+```
+
+## Target grammar
+
+```
+SID                       whole spreadsheet
+SID:Sheet                 a sheet (by title)
+SID:Sheet!A1              a single cell
+SID:Sheet!A1:B10          a range
+SID:Sheet!5               row 5
+SID:Sheet!C               column C
+SID:!A1:B10               range in the first/default sheet
+<empty>                   Drive (listing)
+```
+
+Second operand of `copy` / `move` inherits omitted parts from the first:
+
+```
+Sheet!A1                  inherits SID
+!A1                       inherits SID + sheet
+:Sheet                    inherits SID only
+```
+
+Sheet names containing `:`, `!`, spaces, or `'` must be single-quoted:
+`SID:'My Sheet'!A1`. Embedded `'` is doubled: `'Bob''s'!A1`.
+
+## Output rules
+
+| verb | default | `--format=json` |
+|---|---|---|
+| `get` (DRIVE / SPREADSHEET) | JSON | JSON |
+| `get` (SHEET / RANGE / ROW / COLUMN) | cell/value text | raw API JSON |
+| `put` / `del` / `copy` / `move` | silent | `{target, response}` |
+| `new` | always JSON | always JSON |
+
+Exit codes: `0` success, `1` API/auth error, `2` grammar error.
+429 / 500 / 503 responses retry automatically (exponential backoff, 3 attempts).
+
+## Input formats (stdin for `put`)
+
+Auto-detected:
+
+**JSON** — cell-keyed OR range-keyed:
+```json
+{"A1": "hello", "B1": 42, "C1": "=SUM(A1:B1)"}
+{"A1:B2": [[1, 2], [3, 4]]}
+```
+
+**Cell/value text** — one per line, first space splits cell from value:
+```
+A1 hello world
+A2 123
+A3 =SUM(A1:A2)
+```
+
+Cell keys without `!` are qualified with the target's sheet. Keys with `!`
+pass through unchanged.
+
+## Examples
+
+```bash
+# Drive listing
+sheet-cli get
+
+# Spreadsheet metadata
+sheet-cli get SID
+
+# Read a cell (text)
+sheet-cli get SID:Sheet1!A1
+
+# Read a range (raw API)
+sheet-cli get SID:Sheet1!A1:C10 --format=json
+
+# Single-cell write
+sheet-cli put SID:Sheet1!A1 "hello"
+
+# Batch write from stdin
+echo '{"A1": 1, "B1": 2, "C1": "=A1+B1"}' | sheet-cli put SID:Sheet1
+
+# Clear a range
+sheet-cli del SID:Sheet1!A1:C10
+
+# Delete a row / column / sheet / spreadsheet
+sheet-cli del SID:Sheet1!5
+sheet-cli del SID:Sheet1!C
+sheet-cli del SID:Sheet1
+sheet-cli del SID
+
+# Create
+sheet-cli new "My New Spreadsheet"        # echoes new SID + URL
+sheet-cli new SID:NewSheet                # add a sheet
+sheet-cli new SID:Sheet1!5 --side=above   # insert row above row 5
+sheet-cli new SID:Sheet1!C --side=left    # insert col left of C
+
+# Copy / move (server-side when operands line up)
+sheet-cli copy SID:Sheet1!A1:B10 :Sheet2!D1       # same-SS → copyPaste
+sheet-cli copy SID1:Sheet1 SID2                   # cross-SS sheet → copyTo
+sheet-cli copy SID1:Sheet1!A1:B2 SID2:Sheet1!D1   # fallback: read+write
+sheet-cli move SID:Sheet1!5 !2                    # moveDimension
+sheet-cli move SID:Sheet1!A1:B2 :Sheet2!D1        # cutPaste
+```
+
+## Dispatch table (copy / move)
+
+| Source shape | Dest shape | Same SS? | Path |
+|---|---|---|---|
+| RANGE | RANGE | yes | `copyPaste` (copy) / `cutPaste` (move) — server-side |
+| ROW/COL | ROW/COL (same sheet) | yes | `moveDimension` — server-side |
+| SHEET | SPREADSHEET | no | `spreadsheets.sheets.copyTo` — server-side |
+| RANGE / SHEET | RANGE / SHEET | no | read + write fallback (move also clears source) |
+
+## Bulk writes — recommended pattern for agents
+
+For 10+ cells, generate a JSON object with cell-keyed formulas/values and
+pipe to a single `put`. One HTTP round-trip regardless of cell count.
+
+Write a script (avoids shell-heredoc approval prompts):
+
+```python
+# /tmp/gen.py
+import json
+data = {}
+for row in range(10, 47):
+    data[f"A{row}"] = f"=SUM(B{row}:D{row})"
+    data[f"E{row}"] = f"=A{row}*0.027"
+print(json.dumps(data, indent=2))
+```
+
+Then:
+
+```bash
+python3 /tmp/gen.py | venv/bin/sheet-cli put SID:Sheet1
+```
+
+Scales to thousands of cells in a single call.
+
+## Authentication
+
+OAuth 2.0 desktop flow. Credentials at `~/.sheet-cli/credentials.json`,
+token cached at `~/.sheet-cli/token.pickle`. First run opens a browser;
+subsequent runs reuse and auto-refresh. Run `sheet-cli auth` to re-auth or
+switch accounts.
+
+## See also
+
+- [mcp-server/README.md](mcp-server/README.md) — same grammar exposed as MCP tools for Claude Desktop

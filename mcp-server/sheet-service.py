@@ -1,397 +1,403 @@
 #!/usr/bin/env python3
-"""MCP Server for Google Sheets API v4.
+"""MCP Server for Google Sheets — v2 unified grammar.
 
-This server provides MCP tools for interacting with Google Sheets using OAuth 2.0
-authentication. It acts as the current user, not a service account.
+Exposes the same six-verb grammar as the `sheet-cli` command-line tool,
+plus a raw `sheets_batch_update` escape hatch for advanced formatting and
+structure operations that don't fit in the verb model.
+
+Target-string grammar (SID = spreadsheet ID):
+
+    <empty>                      Drive-level listing
+    SID                          a spreadsheet
+    SID:Sheet                    a sheet by title
+    SID:Sheet!A1                 a cell
+    SID:Sheet!A1:B10             a range
+    SID:Sheet!5                  row 5
+    SID:Sheet!C                  column C
+    SID:!A1                      range in the first/default sheet
+
+Second-operand short forms for copy/move inherit from the first:
+    Sheet!A1     inherits SID
+    !A1          inherits SID + sheet
+    :Sheet       inherits SID
+
+Sheet names containing ':', '!', spaces, or "'" must be single-quoted:
+    SID:'My Sheet'!A1
 """
 
 import json
-import sys
 import os
+import sys
 from typing import Any, Dict, List
 
-# Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from sheet_client import SheetsClient, CellData
+from sheet_cli import dispatch, verbs
+from sheet_cli.grammar import (
+    GrammarError,
+    Target,
+    TargetType,
+    classify,
+    parse,
+    resolve,
+)
+from sheet_client import SheetsClient
+
+
+def _parse_first(s: str) -> Target:
+    """Parse a first-operand target. Empty string is DRIVE."""
+    parsed = parse(s or "")
+    if parsed.is_empty:
+        return Target(None, None, None)
+    if parsed.spreadsheet_id is None:
+        raise GrammarError(f"target must include a spreadsheet ID: {s!r}")
+    return Target(parsed.spreadsheet_id, parsed.sheet, parsed.locator)
+
+
+def _parse_second(s: str, parent: Target) -> Target:
+    return resolve(parent, parse(s or ""))
 
 
 class MCPSheetsServer:
-    """MCP Server for Google Sheets API."""
+    """MCP server exposing the unified six-verb grammar over Google Sheets."""
 
     def __init__(self):
-        """Initialize the MCP server."""
-        self.client = None
-        self.initialized = False
+        self.client: SheetsClient | None = None
 
     def initialize(self):
-        """Initialize the Sheets client with OAuth credentials."""
-        if not self.initialized:
-            # Initialize with OAuth (will use cached token or open browser on first run)
+        if self.client is None:
             self.client = SheetsClient()
-            self.initialized = True
+
+    # ------------------------------------------------------------------
+    # tool catalog
+    # ------------------------------------------------------------------
 
     def get_tools(self) -> List[Dict[str, Any]]:
-        """Return list of available MCP tools."""
         return [
             {
-                "name": "create_spreadsheet",
-                "description": """Create a new Google Spreadsheet.
+                "name": "sheets_get",
+                "description": """Read from a target. Returns raw Google API responses.
 
-RETURNS:
-- spreadsheetId: The ID to use for all subsequent operations
-- spreadsheetUrl: Direct URL to open the spreadsheet in browser
+TARGET SHAPES:
+- '' (empty)              → Drive listing (list of spreadsheets the user can see)
+- 'SID'                   → whole spreadsheet metadata (meta_read)
+- 'SID:Sheet1'            → all values in Sheet1
+- 'SID:Sheet1!A1:B10'     → values in range
+- 'SID:Sheet1!5'          → row 5
+- 'SID:Sheet1!C'          → column C
 
-BEST PRACTICES:
-- Store the returned spreadsheetId for all future read/write operations
-- Use the spreadsheetUrl to share with users or open in browser
-- Optionally provide custom sheet configurations via sheets parameter""",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "title": {
-                            "type": "string",
-                            "description": "Title for the new spreadsheet"
-                        },
-                        "sheets": {
-                            "type": "array",
-                            "items": {"type": "object"},
-                            "description": "Optional list of sheet configuration objects. Each can specify title, rowCount, columnCount, etc."
-                        }
-                    },
-                    "required": ["title"]
-                }
-            },
-            {
-                "name": "read_cells",
-                "description": """Read cell values and/or formulas from Google Sheets ranges.
+FORMAT:
+- 'json' (default): raw Google API response as-is
+- 'text': cell/value pairs — 'A1 hello\\nB1 42' — useful for small reads to save tokens
 
 BEST PRACTICES:
-- Use read_metadata first to get sheet IDs and structure
-- Can read multiple ranges in a single call for efficiency
-- Set read_formulas=true to see formulas instead of calculated values
-- Use for verifying writes or analyzing existing data
-
-FOR CLAUDE CODE - ANALYZING RETURNED DATA:
-- To analyze large cell datasets, use Write tool to create analysis scripts
-- Pattern: Write tool creates /tmp/analyze.py, then execute with python3 /tmp/analyze.py
-- Write tool has persistent permissions - enables autonomous analysis without approval prompts
-- Example: After read_cells returns 1000s of cells, write Python script to parse/validate/analyze
-- This avoids approval interruptions when performing correctness checks or data analysis""",
+- For complex analysis of many cells, request 'json' and parse the structure directly
+- For quick inspection (< 50 cells), 'text' is more compact""",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "spreadsheet_id": {
+                        "target": {
                             "type": "string",
-                            "description": "The ID of the Google Spreadsheet"
+                            "description": "Target string. Empty for Drive listing.",
+                            "default": "",
                         },
-                        "ranges": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "List of A1 notation ranges to read (e.g., ['Sheet1!A1:C10', 'Sheet2!B2:B5'])"
+                        "format": {
+                            "type": "string",
+                            "enum": ["json", "text"],
+                            "default": "json",
+                            "description": "Output format. DRIVE/SPREADSHEET always return JSON.",
                         },
-                        "read_formulas": {
-                            "type": "boolean",
-                            "description": "If true, returns formulas instead of calculated values",
-                            "default": False
-                        }
                     },
-                    "required": ["spreadsheet_id", "ranges"]
-                }
+                    "required": [],
+                },
             },
             {
-                "name": "write_cells",
-                "description": """Write values and/or formulas to Google Sheets cells.
+                "name": "sheets_put",
+                "description": """Write cells to a target. Batches into one API call.
 
-BEST PRACTICES FOR EFFICIENCY:
-- BATCH OPERATIONS: For 10+ cells, generate data programmatically and pass in single call
-- Use Python to generate the data array instead of making multiple calls
-- Example: For 100 cells, create one data array with 100 entries, not 100 separate calls
-- Formulas: Prefix with '=' (e.g., '=SUM(A1:A10)')
-- Values: Pass as-is (numbers, strings, dates)
+DATA SHAPES:
+- {"A1": "hello", "B1": 42}              — cell-keyed dict, each becomes a 1x1 write
+- {"A1:B2": [[1,2],[3,4]]}                — range-keyed dict, values are 2D
+- [[1,2],[3,4]]                           — bare 2D array; target must be a range
+- scalar ("hello" / 42)                   — single-cell write; target must be a cell
 
-EFFICIENCY GUIDELINES:
-- Under 10 cells: Individual operations fine
-- 10-100 cells: Batch into single write_cells call
-- 100+ cells: Generate programmatically with loops, single call
-- This scales to thousands of cells without performance issues
+Keys without '!' are qualified with the target's sheet. Keys with '!' pass through.
 
-FOR CLAUDE CODE USERS - AVOIDING APPROVAL PROMPTS:
-- Use Write tool to create Python scripts (has persistent permissions, no repeated approvals)
-- Pattern: Write tool creates /tmp/script.py, then execute with python3 /tmp/script.py
-- This generates data arrays autonomously without approval interruptions
-- Example workflow:
-  1. Use Write tool: Create /tmp/gen_data.py with loops to build data array
-  2. Execute: python3 /tmp/gen_data.py outputs JSON data structure
-  3. Pass output to write_cells in single call
-- DO NOT use heredoc syntax (python3 << 'EOF') as it triggers approvals
-- Write tool approach enables fully autonomous data generation and analysis""",
+FORMULAS: prefix with '=' ('=SUM(A1:A10)'). Google parses in USER_ENTERED mode.
+
+BULK WRITES (10+ cells): generate the full dict programmatically and send in ONE call.
+A single sheets_put scales to thousands of cells — do NOT loop over sheets_put.""",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "spreadsheet_id": {
+                        "target": {
                             "type": "string",
-                            "description": "The ID of the Google Spreadsheet"
+                            "description": "Target string (cell, range, or sheet).",
                         },
                         "data": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "range": {
-                                        "type": "string",
-                                        "description": "A1 notation range (e.g., 'Sheet1!A1:C3')"
-                                    },
-                                    "values": {
-                                        "type": "array",
-                                        "description": "2D array of values to write. Formulas start with '='"
-                                    }
-                                },
-                                "required": ["range", "values"]
-                            },
-                            "description": "List of write operations, each with a range and 2D array of values"
-                        }
-                    },
-                    "required": ["spreadsheet_id", "data"]
-                }
-            },
-            {
-                "name": "read_metadata",
-                "description": """Get spreadsheet metadata including sheet names, IDs, and structure.
-
-BEST PRACTICES:
-- ALWAYS call this FIRST before using write_metadata
-- Provides sheet IDs needed for formatting and structure operations
-- Returns complete spreadsheet structure, sheet properties, named ranges
-- Use to understand existing data before making changes""",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "spreadsheet_id": {
-                            "type": "string",
-                            "description": "The ID of the Google Spreadsheet"
-                        }
-                    },
-                    "required": ["spreadsheet_id"]
-                }
-            },
-            {
-                "name": "write_metadata",
-                "description": """Modify spreadsheet structure (add/delete sheets, format cells, create named ranges, etc.)
-
-WHEN TO USE:
-- Use write_cells for: Data values and formulas (cell content)
-- Use write_metadata for: Formatting, structure, colors, borders (cell properties)
-
-BEST PRACTICES:
-- Call read_metadata FIRST to get sheet IDs
-- Batch multiple formatting operations in single requests array
-- Common operations: repeatCell (formatting), addSheet, deleteSheet, autoResizeDimensions
-- Reference: https://developers.google.com/sheets/api/reference/rest/v4/spreadsheets/request
-
-EFFICIENCY:
-- Always batch multiple requests in one call
-- Example: Format header + freeze row + auto-resize = 3 requests in 1 call""",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "spreadsheet_id": {
-                            "type": "string",
-                            "description": "The ID of the Google Spreadsheet"
+                            "description": "Cell-keyed dict, range-keyed dict, 2D array, or scalar.",
                         },
+                    },
+                    "required": ["target", "data"],
+                },
+            },
+            {
+                "name": "sheets_del",
+                "description": """Delete or clear what's at the target.
+
+BEHAVIOR BY TARGET TYPE:
+- SPREADSHEET   → Drive delete (moves to trash)
+- SHEET         → deleteSheet
+- RANGE         → clear values (preserves formatting and notes)
+- ROW/COLUMN    → deleteDimension
+
+There is no Drive-level del — bare empty target is rejected.""",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "target": {
+                            "type": "string",
+                            "description": "Target string.",
+                        },
+                    },
+                    "required": ["target"],
+                },
+            },
+            {
+                "name": "sheets_new",
+                "description": """Create a new spreadsheet, sheet, row, or column.
+
+BEHAVIOR BY TARGET:
+- '' or 'Title'        → new spreadsheet (target is treated as the title)
+- 'SID:NewSheetName'   → add a sheet
+- 'SID:Sheet1!5'       → insert a row (side: 'above'|'below', default 'below')
+- 'SID:Sheet1!C'       → insert a column (side: 'left'|'right', default 'right')
+
+Returns the new resource. For a new spreadsheet the response includes
+spreadsheetId and spreadsheetUrl — store these for subsequent operations.""",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "target": {
+                            "type": "string",
+                            "default": "",
+                            "description": "Target or title.",
+                        },
+                        "side": {
+                            "type": "string",
+                            "enum": ["above", "below", "left", "right"],
+                            "description": "For row/column targets only.",
+                        },
+                    },
+                    "required": [],
+                },
+            },
+            {
+                "name": "sheets_copy",
+                "description": """Copy source to dest. Uses server-side APIs when possible.
+
+DISPATCH TABLE:
+- same spreadsheet, RANGE→RANGE   → copyPaste   (server-side, no data transfer)
+- cross spreadsheet, whole SHEET  → sheets.copyTo (server-side, no data transfer)
+- other shapes                     → read + write fallback
+
+INHERITANCE: dest can omit components to inherit from source:
+- 'Sheet2!D1'    → same SID as source, different sheet
+- '!D1'          → same SID and same sheet as source
+- ':Sheet2'      → same SID, different sheet""",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "source": {"type": "string", "description": "Source target."},
+                        "dest": {"type": "string", "description": "Destination target (may inherit from source)."},
+                    },
+                    "required": ["source", "dest"],
+                },
+            },
+            {
+                "name": "sheets_move",
+                "description": """Move source to dest. Uses server-side APIs when possible.
+
+DISPATCH TABLE:
+- same sheet, ROW/COL              → moveDimension (server-side)
+- same spreadsheet, RANGE→RANGE    → cutPaste (server-side)
+- cross-spreadsheet                → copy + delete (never server-side)
+
+Same inheritance rules as sheets_copy.""",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "source": {"type": "string", "description": "Source target."},
+                        "dest": {"type": "string", "description": "Destination target (may inherit from source)."},
+                    },
+                    "required": ["source", "dest"],
+                },
+            },
+            {
+                "name": "sheets_batch_update",
+                "description": """Raw spreadsheets.batchUpdate escape hatch for operations that don't fit the verb grammar:
+formatting (repeatCell, updateCells), conditional rules, merges, protected ranges,
+named ranges, auto-resize, find/replace, sortRange, etc.
+
+CALL sheets_get 'SID' FIRST to discover sheetId values needed in GridRange objects.
+
+BATCH MULTIPLE REQUESTS in one call — one formatting operation per call is wasteful.
+
+Reference: https://developers.google.com/sheets/api/reference/rest/v4/spreadsheets/request""",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "spreadsheet_id": {"type": "string"},
                         "requests": {
                             "type": "array",
                             "items": {"type": "object"},
-                            "description": "List of batch update requests (see Google Sheets API batchUpdate reference)"
-                        }
+                            "description": "Array of Request objects (addSheet, repeatCell, etc.).",
+                        },
                     },
-                    "required": ["spreadsheet_id", "requests"]
-                }
-            }
+                    "required": ["spreadsheet_id", "requests"],
+                },
+            },
         ]
 
-    def execute_tool(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute a tool and return the result."""
-        if not self.initialized:
-            self.initialize()
+    # ------------------------------------------------------------------
+    # dispatch
+    # ------------------------------------------------------------------
 
-        try:
-            if name == "create_spreadsheet":
-                return self._create_spreadsheet(arguments)
-            elif name == "read_cells":
-                return self._read_cells(arguments)
-            elif name == "write_cells":
-                return self._write_cells(arguments)
-            elif name == "read_metadata":
-                return self._read_metadata(arguments)
-            elif name == "write_metadata":
-                return self._write_metadata(arguments)
-            else:
-                return {"error": f"Unknown tool: {name}"}
-        except Exception as e:
-            return {"error": str(e)}
+    def execute_tool(self, name: str, args: Dict[str, Any]) -> Any:
+        self.initialize()
+        assert self.client is not None
 
-    def _create_spreadsheet(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute create_spreadsheet tool."""
-        title = args["title"]
-        sheets = args.get("sheets")
+        if name == "sheets_get":
+            target = _parse_first(args.get("target", ""))
+            response = verbs.do_get(self.client, target)
+            if args.get("format") == "text":
+                return _format_as_text(target, response)
+            return response
 
-        result = self.client.create(title, sheets=sheets)
-        return {"result": result}
+        if name == "sheets_put":
+            target = _parse_first(args["target"])
+            return verbs.do_put(self.client, target, args["data"])
 
-    def _read_cells(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute read_cells tool."""
-        spreadsheet_id = args["spreadsheet_id"]
-        ranges = args["ranges"]
-        read_formulas = args.get("read_formulas", False)
+        if name == "sheets_del":
+            target = _parse_first(args["target"])
+            return verbs.do_del(self.client, target)
 
-        # Determine cell data type
-        types = CellData.FORMULA if read_formulas else CellData.VALUE
+        if name == "sheets_new":
+            target = _parse_first(args.get("target", ""))
+            return verbs.do_new(self.client, target, side=args.get("side"))
 
-        result = self.client.read(spreadsheet_id, ranges, types=types)
-        return {"result": result}
+        if name == "sheets_copy":
+            source = _parse_first(args["source"])
+            dest = _parse_second(args["dest"], source)
+            return dispatch.do_copy(self.client, source, dest)
 
-    def _write_cells(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute write_cells tool."""
-        spreadsheet_id = args["spreadsheet_id"]
-        data = args["data"]
+        if name == "sheets_move":
+            source = _parse_first(args["source"])
+            dest = _parse_second(args["dest"], source)
+            return dispatch.do_move(self.client, source, dest)
 
-        result = self.client.write(spreadsheet_id, data)
-        return {"result": result}
+        if name == "sheets_batch_update":
+            return self.client.meta_write(args["spreadsheet_id"], args["requests"])
 
-    def _read_metadata(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute read_metadata tool."""
-        spreadsheet_id = args["spreadsheet_id"]
+        raise ValueError(f"unknown tool: {name}")
 
-        result = self.client.meta_read(spreadsheet_id)
-        return {"result": result}
-
-    def _write_metadata(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute write_metadata tool."""
-        spreadsheet_id = args["spreadsheet_id"]
-        requests = args["requests"]
-
-        result = self.client.meta_write(spreadsheet_id, requests)
-        return {"result": result}
+    # ------------------------------------------------------------------
+    # JSON-RPC
+    # ------------------------------------------------------------------
 
     def handle_request(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle a JSON-RPC request."""
         method = request.get("method")
         params = request.get("params", {})
         request_id = request.get("id")
 
         if method == "initialize":
-            # Initialize the server
             self.initialize()
             return {
                 "jsonrpc": "2.0",
                 "id": request_id,
                 "result": {
                     "protocolVersion": "2024-11-05",
-                    "serverInfo": {
-                        "name": "sheets-mcp-server",
-                        "version": "1.0.0"
-                    },
-                    "capabilities": {
-                        "tools": {}
-                    }
-                }
+                    "serverInfo": {"name": "sheets-mcp-server", "version": "2.0.0"},
+                    "capabilities": {"tools": {}},
+                },
             }
 
-        elif method == "tools/list":
-            # Return list of available tools
+        if method == "tools/list":
             return {
                 "jsonrpc": "2.0",
                 "id": request_id,
-                "result": {
-                    "tools": self.get_tools()
-                }
+                "result": {"tools": self.get_tools()},
             }
 
-        elif method == "tools/call":
-            # Execute a tool
+        if method == "tools/call":
             tool_name = params.get("name")
             arguments = params.get("arguments", {})
-
-            result = self.execute_tool(tool_name, arguments)
-
-            if "error" in result:
-                return {
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "error": {
-                        "code": -32603,
-                        "message": result["error"]
-                    }
-                }
-            else:
+            try:
+                result = self.execute_tool(tool_name, arguments)
                 return {
                     "jsonrpc": "2.0",
                     "id": request_id,
                     "result": {
                         "content": [
-                            {
-                                "type": "text",
-                                "text": json.dumps(result["result"], indent=2)
-                            }
+                            {"type": "text", "text": result if isinstance(result, str)
+                             else json.dumps(result, indent=2, default=str)}
                         ]
-                    }
+                    },
                 }
+            except GrammarError as e:
+                return _rpc_error(request_id, -32602, f"grammar error: {e}")
+            except Exception as e:
+                return _rpc_error(request_id, -32603, str(e))
 
-        else:
-            return {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "error": {
-                    "code": -32601,
-                    "message": f"Method not found: {method}"
-                }
-            }
+        return _rpc_error(request_id, -32601, f"method not found: {method}")
 
     def run(self):
-        """Run the MCP server, reading from stdin and writing to stdout."""
-        # Read requests from stdin and write responses to stdout
         for line in sys.stdin:
             line = line.strip()
             if not line:
                 continue
-
             try:
                 request = json.loads(line)
                 response = self.handle_request(request)
-
-                # Write response to stdout
                 print(json.dumps(response), flush=True)
-
             except json.JSONDecodeError as e:
-                # Invalid JSON
-                error_response = {
-                    "jsonrpc": "2.0",
-                    "id": None,
-                    "error": {
-                        "code": -32700,
-                        "message": f"Parse error: {str(e)}"
-                    }
-                }
-                print(json.dumps(error_response), flush=True)
-
+                print(json.dumps(_rpc_error(None, -32700, f"parse error: {e}")), flush=True)
             except Exception as e:
-                # Unexpected error
-                error_response = {
-                    "jsonrpc": "2.0",
-                    "id": None,
-                    "error": {
-                        "code": -32603,
-                        "message": f"Internal error: {str(e)}"
-                    }
-                }
-                print(json.dumps(error_response), flush=True)
+                print(json.dumps(_rpc_error(None, -32603, f"internal error: {e}")), flush=True)
+
+
+def _rpc_error(request_id, code: int, message: str) -> Dict[str, Any]:
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "error": {"code": code, "message": message},
+    }
+
+
+def _format_as_text(target: Target, response: Any) -> str:
+    """Flatten a values response into 'A1 val' lines for cell-level targets."""
+    tt = classify(target)
+    if tt in (TargetType.DRIVE, TargetType.SPREADSHEET):
+        return json.dumps(response, indent=2, default=str)
+
+    # Collect (range_str, values) pairs
+    pairs = []
+    if isinstance(response, dict):
+        if "valueRanges" in response:
+            pairs = [(vr.get("range", ""), vr.get("values", [])) for vr in response["valueRanges"]]
+        elif "values" in response or "range" in response:
+            pairs = [(response.get("range", ""), response.get("values", []))]
+
+    # Lazy-import to avoid circular issues at module load
+    from sheet_cli import formats
+    flat = {}
+    for range_str, values in pairs:
+        flat.update(formats.expand_range_to_cells(range_str, values))
+    return formats.format_cell_value_pairs(flat)
 
 
 def main():
-    """Main entry point for the MCP server."""
-    server = MCPSheetsServer()
-    server.run()
+    MCPSheetsServer().run()
 
 
 if __name__ == "__main__":

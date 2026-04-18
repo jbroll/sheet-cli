@@ -38,19 +38,44 @@ No opinions, just access. Direct mapping to Google's REST API with minimal abstr
 
 ```
 sheet-cli/
-├── src/                  # Main package
-│   ├── client.py         # SheetsClient (~250 lines)
-│   ├── auth.py           # OAuth flow (~70 lines)
-│   ├── utils.py          # A1 notation helpers (~90 lines)
-│   ├── exceptions.py     # Custom exceptions (~30 lines)
-│   └── __init__.py       # Package exports
+├── src/
+│   ├── sheet_client/     # Library (thin Google API wrapper)
+│   │   ├── client.py     # SheetsClient
+│   │   ├── auth.py       # OAuth flow
+│   │   ├── utils.py      # A1/grid utilities
+│   │   └── exceptions.py # Custom exceptions
+│   └── sheet_cli/        # Unified six-verb CLI
+│       ├── cli.py        # argparse entry point
+│       ├── grammar.py    # target-string grammar (parse/resolve/classify)
+│       ├── verbs.py      # get / put / del / new
+│       ├── dispatch.py   # copy / move with server-side optimizations
+│       └── formats.py    # stdin/stdout formatters
 │
+├── mcp-server/           # MCP server exposing client to Claude Desktop
 ├── example/              # Usage examples
 ├── test/                 # Unit tests
 ├── API.md                # Complete API reference
 ├── README.md             # User documentation
 └── CLAUDE.md             # This file
 ```
+
+## CLI Grammar (v2)
+
+Six verbs over one target-string grammar:
+
+```
+get    TARGET            read cell / range / sheet / spreadsheet / drive
+put    TARGET [VALUE]    write; scalar sugar, else auto-detected stdin
+del    TARGET            clear range / delete sheet / row / col / spreadsheet
+new    [TARGET]          create spreadsheet / sheet / row / col
+copy   SOURCE DEST       copy (server-side when possible)
+move   SOURCE DEST       move (server-side when possible)
+```
+
+Target syntax: `SID:Sheet!locator`. Second-operand parts can be omitted to
+inherit from the first (e.g., `:Sheet2!A1` for same SID, different sheet).
+Output: `get` is text-first (use `--format=json` for API shape); mutations
+are silent (use `--format=json` to echo); `new` always prints JSON.
 
 ## How You Use This
 
@@ -97,56 +122,31 @@ When user requests complex operations:
 3. No magic - explicit decisions
 
 **Bulk cell operations with Python generation:**
-When writing many cells (hundreds or thousands), generate JSON data with Python:
-1. Use Python heredoc to generate complete cell dictionary
-2. Output as JSON to temp file
-3. Pipe to `sheet-cli write` command in single operation
-4. Far more efficient than individual cell writes
+When writing many cells (hundreds or thousands), generate JSON data with Python and
+pipe to `sheet-cli put SID:Sheet`. Keys in the JSON are A1 addresses relative to the
+target sheet (no `Sheet1!` prefix needed — it's inherited from the target).
 
-Example pattern:
 ```bash
-python3 << 'EOFPY' > /tmp/batch_data.json
-import json
-
-data = {}
-# Generate formulas programmatically
-for row in range(10, 47):
-    data[f"Sheet1!A{row}"] = f"=SUM(B{row}:D{row})"
-    data[f"Sheet1!E{row}"] = f"=A{row}*0.027"
-
-print(json.dumps(data, indent=2))
-EOFPY
-
-cat /tmp/batch_data.json | venv/bin/sheet-cli write SPREADSHEET_ID
+# Use Write tool to create /tmp/gen.py, then execute:
+python3 /tmp/gen.py | venv/bin/sheet-cli put SPREADSHEET_ID:Sheet1
 ```
 
-This approach scales from dozens to thousands of cells without performance degradation. Use it whenever:
+`/tmp/gen.py`:
+```python
+import json
+data = {}
+for row in range(10, 47):
+    data[f"A{row}"] = f"=SUM(B{row}:D{row})"
+    data[f"E{row}"] = f"=A{row}*0.027"
+print(json.dumps(data, indent=2))
+```
+
+This scales from dozens to thousands of cells in a single API call. Use it for:
 - Creating new sheets with structured data
 - Applying formulas to many rows
-- Bulk updates with patterns
 - Any operation on 10+ cells
 
-**Important for Claude Code:** To avoid approval prompts, use the Write tool to create Python scripts directly, then execute them:
-
-```bash
-# Use Write tool to create script at /tmp/script.py
-# (See Write tool example below)
-
-# Execute script (python3:* is typically approved)
-python3 /tmp/script.py | venv/bin/sheet-cli write SPREADSHEET_ID
-```
-
-**Write tool example:**
-```python
-# Create /tmp/script.py using Write tool with this content:
-import json
-data = {}
-for row in range(10, 47):
-    data[f"Sheet1!A{row}"] = f"=SUM(B{row}:D{row})"
-print(json.dumps(data, indent=2))
-```
-
-This pattern avoids heredoc approval prompts entirely - the Write tool creates the file directly, then you execute it. This enables fully autonomous execution for data generation and analysis tasks.
+Prefer the Write tool for generating the script (avoids heredoc approval prompts).
 
 ## Implementation Notes
 

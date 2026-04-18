@@ -227,24 +227,20 @@ class SheetsClient:
             return self._execute_with_retry(request)
 
     def write(self, spreadsheet_id: str, data: List[dict]) -> dict:
-        """Write to cells.
+        """Write cell values in a single batched call.
 
         Args:
             spreadsheet_id: Spreadsheet ID (required)
-            data: List of write operations
+            data: List of write operations, each with 'range' (A1 notation)
+                and 'values' (2D array). Formulas start with '='.
+
                 [
                     {'range': 'Sheet1!A1', 'values': [[1, 2, 3], [4, 5, 6]]},
                     {'range': 'Sheet2!B5', 'values': [['text', '=SUM(A:A)']]},
                 ]
 
-                Each dict can have:
-                - 'range': A1 notation (required)
-                - 'values': 2D array (for value/formula writes)
-                - 'format': Format dict (for formatting writes)
-                - 'note': String (for note writes)
-
         Returns:
-            Raw API response with update results.
+            Raw API response with update results:
             {
                 'spreadsheetId': '...',
                 'totalUpdatedRows': 10,
@@ -253,11 +249,10 @@ class SheetsClient:
                 'responses': [...]
             }
 
-        Behavior:
-            - Formulas: Start with '=', automatically parsed
-            - Clear values: values=[[]] or values=[['']]
-            - Clear formatting: format={} (empty dict)
-            - Multiple operations: Batched in single API call
+        Notes:
+            - Uses valueInputOption=USER_ENTERED (formulas and dates are parsed).
+            - To clear values, use clear(). To write formatting or notes, use
+              meta_write() with repeatCell / updateCells requests.
 
         Examples:
             # Write values
@@ -272,21 +267,6 @@ class SheetsClient:
                 'values': [['=SUM(A1:C1)'], ['=SUM(A2:C2)']]
             }])
 
-            # Write values and format together
-            client.write('spreadsheet-id', [
-                {'range': 'Sheet1!A1', 'values': [['Total']]},
-                {'range': 'Sheet1!A1', 'format': {
-                    'backgroundColor': {'red': 0.9, 'green': 0.9, 'blue': 0.9},
-                    'textFormat': {'bold': True}
-                }}
-            ])
-
-            # Write note
-            client.write('spreadsheet-id', [{
-                'range': 'Sheet1!A1',
-                'note': 'Important cell!'
-            }])
-
             # Batch write multiple ranges
             client.write('spreadsheet-id', [
                 {'range': 'Sheet1!A1', 'values': [[1, 2, 3]]},
@@ -294,35 +274,43 @@ class SheetsClient:
                 {'range': 'Sheet3!C10', 'values': [[7, 8, 9]]}
             ])
         """
-        # Get spreadsheet ID
         sheet_id = self._get_spreadsheet_id(spreadsheet_id)
 
-        # Separate value writes from format/note writes
-        value_writes = [d for d in data if 'values' in d]
-        other_writes = [d for d in data if 'format' in d or 'note' in d]
+        value_data = [{'range': d['range'], 'values': d['values']} for d in data]
+        body = {
+            'valueInputOption': 'USER_ENTERED',
+            'data': value_data,
+        }
+        request = self.spreadsheets.values().batchUpdate(
+            spreadsheetId=sheet_id,
+            body=body,
+        )
+        return self._execute_with_retry(request)
 
-        results = {}
+    def clear(self, spreadsheet_id: str, ranges: List[str]) -> dict:
+        """Clear cell values in one or more ranges.
 
-        # Handle value writes with values API
-        if value_writes:
-            value_data = [{'range': d['range'], 'values': d['values']} for d in value_writes]
-            body = {
-                'valueInputOption': 'USER_ENTERED',
-                'data': value_data
+        Uses values.batchClear — removes values and formulas but preserves
+        formatting, notes, merges, and other cell metadata. To clear those,
+        use meta_write() with updateCells.
+
+        Args:
+            spreadsheet_id: Spreadsheet ID (required)
+            ranges: List of A1 notation ranges to clear
+
+        Returns:
+            Raw API response:
+            {
+                'spreadsheetId': '...',
+                'clearedRanges': ['Sheet1!A1:B10', ...]
             }
-            request = self.spreadsheets.values().batchUpdate(
-                spreadsheetId=sheet_id,
-                body=body
-            )
-            results['values'] = self._execute_with_retry(request)
-
-        # Handle format/note writes with batchUpdate
-        if other_writes:
-            # TODO: Implement format and note writes using batch_update
-            # This requires converting to updateCells requests
-            raise NotImplementedError("Format and note writes not yet implemented")
-
-        return results.get('values', {})
+        """
+        sheet_id = self._get_spreadsheet_id(spreadsheet_id)
+        request = self.spreadsheets.values().batchClear(
+            spreadsheetId=sheet_id,
+            body={'ranges': ranges},
+        )
+        return self._execute_with_retry(request)
 
     def meta_read(self, spreadsheet_id: str) -> dict:
         """Read spreadsheet metadata and structure.
@@ -642,3 +630,40 @@ class SheetsClient:
 
         request = self.spreadsheets.create(body=body)
         return self._execute_with_retry(request)
+
+    def copy_sheet_to(self, source_spreadsheet_id: str, source_sheet_id: int,
+                      destination_spreadsheet_id: str) -> dict:
+        """Copy a sheet from one spreadsheet to another using sheets.copyTo.
+
+        Server-side operation — data stays within Google's infrastructure.
+
+        Args:
+            source_spreadsheet_id: Spreadsheet ID containing the source sheet
+            source_sheet_id: Numeric sheet ID (not title) of the source sheet
+            destination_spreadsheet_id: Target spreadsheet ID
+
+        Returns:
+            Raw API response with the new sheet's properties:
+            {
+                'sheetId': ...,
+                'title': 'Copy of ...',
+                'index': ...,
+                'gridProperties': {...}
+            }
+        """
+        request = self.spreadsheets.sheets().copyTo(
+            spreadsheetId=source_spreadsheet_id,
+            sheetId=source_sheet_id,
+            body={'destinationSpreadsheetId': destination_spreadsheet_id},
+        )
+        return self._execute_with_retry(request)
+
+    def delete_spreadsheet(self, spreadsheet_id: str) -> None:
+        """Delete a spreadsheet via the Drive API (moves it to trash).
+
+        Args:
+            spreadsheet_id: Spreadsheet ID to delete
+        """
+        sheet_id = self._get_spreadsheet_id(spreadsheet_id)
+        request = self.drive.files().delete(fileId=sheet_id)
+        self._execute_with_retry(request)
