@@ -16,12 +16,26 @@ Target-string grammar (SID = spreadsheet ID):
     SID:Sheet!C                  column C
     SID:!A1                      range in the first/default sheet
 
+Any target may carry a .property suffix to address formatting, structure, or
+metadata of the resource (always returned as JSON):
+
+    SID.title                    spreadsheet title
+    SID.named.NAME               named range
+    SID:Sheet.freeze             frozen rows/cols
+    SID:Sheet.color              tab color
+    SID:Sheet.conditional[i]     conditional-format rule by index
+    SID:Sheet!A1:B2.format       cell format on a range
+    SID:Sheet!5.height           row pixel height
+    SID:Sheet!C.width            column pixel width
+
 Second-operand short forms for copy/move inherit from the first:
     Sheet!A1     inherits SID
     !A1          inherits SID + sheet
     :Sheet       inherits SID
 
-Sheet names containing ':', '!', spaces, or "'" must be single-quoted:
+copy/move do NOT accept .property targets.
+
+Sheet names containing ':', '!', '.', spaces, or "'" must be single-quoted:
     SID:'My Sheet'!A1
 """
 
@@ -51,7 +65,7 @@ def _parse_first(s: str) -> Target:
         return Target(None, None, None)
     if parsed.spreadsheet_id is None:
         raise GrammarError(f"target must include a spreadsheet ID: {s!r}")
-    return Target(parsed.spreadsheet_id, parsed.sheet, parsed.locator)
+    return Target(parsed.spreadsheet_id, parsed.sheet, parsed.locator, parsed.property)
 
 
 def _parse_second(s: str, parent: Target) -> Target:
@@ -86,9 +100,18 @@ TARGET SHAPES:
 - 'SID:Sheet1!5'          → row 5
 - 'SID:Sheet1!C'          → column C
 
+PROPERTIES (.property suffix on any target — always returns JSON):
+- spreadsheet:  .title, .named (list), .named.NAME (one)
+- sheet:        .title, .freeze, .color, .hidden, .conditional (list), .conditional[i] (one)
+- range:        .format, .borders, .merge, .note, .validation, .protected
+- row:          .height
+- column:       .width
+Examples: 'SID.title', 'SID:Sheet1.freeze', 'SID:Sheet1!A1:B2.format', 'SID.named.sales'.
+
 FORMAT:
 - 'json' (default): raw Google API response as-is
 - 'text': cell/value pairs — 'A1 hello\\nB1 42' — useful for small reads to save tokens
+  Property targets, DRIVE, and SPREADSHEET always return JSON regardless.
 
 BEST PRACTICES:
 - For complex analysis of many cells, request 'json' and parse the structure directly
@@ -113,9 +136,9 @@ BEST PRACTICES:
             },
             {
                 "name": "sheets_put",
-                "description": """Write cells to a target. Batches into one API call.
+                "description": """Write cells (or properties) to a target. Batches into one API call.
 
-DATA SHAPES:
+DATA SHAPES (cell writes):
 - {"A1": "hello", "B1": 42}              — cell-keyed dict, each becomes a 1x1 write
 - {"A1:B2": [[1,2],[3,4]]}                — range-keyed dict, values are 2D
 - [[1,2],[3,4]]                           — bare 2D array; target must be a range
@@ -124,6 +147,21 @@ DATA SHAPES:
 Keys without '!' are qualified with the target's sheet. Keys with '!' pass through.
 
 FORMULAS: prefix with '=' ('=SUM(A1:A10)'). Google parses in USER_ENTERED mode.
+
+PROPERTY WRITES (target carries .property suffix):
+- '.title'                  → string ('Q3 Report')
+- '.color' / tab color      → '#rrggbb' or {"red":r,"green":g,"blue":b} (channels in [0,1])
+- '.freeze'                 → "rows" / "rows cols" / {"rows":N,"columns":M}
+- '.hidden'                 → bool
+- '.note'                   → string (applied to whole range)
+- '.format' / '.borders' / '.validation'
+                            → JSON object matching the Sheets API request shape
+- '.conditional' (append)   → ConditionalFormatRule
+- '.conditional[i]' (replace at index)
+                            → ConditionalFormatRule
+- '.named.NAME'             → 'Sheet1!A1:B100' (A1) or a GridRange dict
+- '.height' / '.width'      → integer pixel size
+Property responses are always JSON. Use sheets_get '.property' first to inspect current state.
 
 BULK WRITES (10+ cells): generate the full dict programmatically and send in ONE call.
 A single sheets_put scales to thousands of cells — do NOT loop over sheets_put.""",
@@ -151,7 +189,16 @@ BEHAVIOR BY TARGET TYPE:
 - RANGE         → clear values (preserves formatting and notes)
 - ROW/COLUMN    → deleteDimension
 
-There is no Drive-level del — bare empty target is rejected.""",
+There is no Drive-level del — bare empty target is rejected.
+
+PROPERTY DELETES (.property suffix): reset / clear the property in place
+- '.format' / '.borders' / '.note' / '.validation' / '.merge' → clear it on the range
+- '.freeze' → set frozen rows/cols to 0
+- '.color' / '.hidden' → reset to defaults
+- '.protected' → delete every protected range overlapping the target
+- '.named.NAME' → remove that named range
+- '.conditional' (no key) → delete every rule on the sheet
+- '.conditional[i]' → delete that rule""",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -165,7 +212,7 @@ There is no Drive-level del — bare empty target is rejected.""",
             },
             {
                 "name": "sheets_new",
-                "description": """Create a new spreadsheet, sheet, row, or column.
+                "description": """Create a new spreadsheet, sheet, row, column, or collection element.
 
 BEHAVIOR BY TARGET:
 - '' or 'Title'        → new spreadsheet (target is treated as the title)
@@ -174,7 +221,15 @@ BEHAVIOR BY TARGET:
 - 'SID:Sheet1!C'       → insert a column (side: 'left'|'right', default 'right')
 
 Returns the new resource. For a new spreadsheet the response includes
-spreadsheetId and spreadsheetUrl — store these for subsequent operations.""",
+spreadsheetId and spreadsheetUrl — store these for subsequent operations.
+
+PROPERTY APPENDS (collections only — pass `data`):
+- 'SID:Sheet1.conditional'  → data = ConditionalFormatRule (appended at end)
+- 'SID.named.NAME'          → data = 'Sheet1!A1:B100' or GridRange dict
+- 'SID:Sheet1!A1:B2.merge'  → data = 'MERGE_ALL' | 'MERGE_COLUMNS' | 'MERGE_ROWS' (default MERGE_ALL)
+- 'SID:Sheet1!A1:B2.protected' → data = ProtectedRange spec dict (range filled in for you)
+
+Use sheets_put for non-collection property writes.""",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -187,6 +242,9 @@ spreadsheetId and spreadsheetUrl — store these for subsequent operations.""",
                             "type": "string",
                             "enum": ["above", "below", "left", "right"],
                             "description": "For row/column targets only.",
+                        },
+                        "data": {
+                            "description": "Body for property appends (.conditional rule, .named A1/GridRange, .merge type, .protected spec). Ignored for non-property targets.",
                         },
                     },
                     "required": [],
@@ -204,7 +262,9 @@ DISPATCH TABLE:
 INHERITANCE: dest can omit components to inherit from source:
 - 'Sheet2!D1'    → same SID as source, different sheet
 - '!D1'          → same SID and same sheet as source
-- ':Sheet2'      → same SID, different sheet""",
+- ':Sheet2'      → same SID, different sheet
+
+NOT SUPPORTED for .property targets — use sheets_get + sheets_put to copy a property value.""",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -223,7 +283,8 @@ DISPATCH TABLE:
 - same spreadsheet, RANGE→RANGE    → cutPaste (server-side)
 - cross-spreadsheet                → copy + delete (never server-side)
 
-Same inheritance rules as sheets_copy.""",
+Same inheritance rules as sheets_copy.
+NOT SUPPORTED for .property targets.""",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -284,7 +345,11 @@ Reference: https://developers.google.com/sheets/api/reference/rest/v4/spreadshee
 
         if name == "sheets_new":
             target = _parse_first(args.get("target", ""))
-            return verbs.do_new(self.client, target, side=args.get("side"))
+            return verbs.do_new(
+                self.client, target,
+                side=args.get("side"),
+                data=args.get("data"),
+            )
 
         if name == "sheets_copy":
             source = _parse_first(args["source"])
@@ -375,7 +440,12 @@ def _rpc_error(request_id, code: int, message: str) -> Dict[str, Any]:
 
 
 def _format_as_text(target: Target, response: Any) -> str:
-    """Flatten a values response into 'A1 val' lines for cell-level targets."""
+    """Flatten a values response into 'A1 val' lines for cell-level targets.
+
+    Properties always return JSON (their responses aren't cell-shaped).
+    """
+    if target.property is not None:
+        return json.dumps(response, indent=2, default=str)
     tt = classify(target)
     if tt in (TargetType.DRIVE, TargetType.SPREADSHEET):
         return json.dumps(response, indent=2, default=str)

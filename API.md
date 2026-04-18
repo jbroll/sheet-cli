@@ -83,10 +83,10 @@ class CellData(IntFlag):
 Combine flags with bitwise OR:
 ```python
 # Values and formulas
-client.read(['Sheet1!A1:C10'], types=CellData.VALUE | CellData.FORMULA)
+client.read('spreadsheet-id', ['Sheet1!A1:C10'], types=CellData.VALUE | CellData.FORMULA)
 
 # Everything
-client.read(['Sheet1!A1:C10'], types=CellData.VALUE | CellData.FORMULA | CellData.FORMAT | CellData.NOTE)
+client.read('spreadsheet-id', ['Sheet1!A1:C10'], types=CellData.VALUE | CellData.FORMULA | CellData.FORMAT | CellData.NOTE)
 ```
 
 ## Method 0: list_spreadsheets()
@@ -802,7 +802,7 @@ No manual retry logic needed.
 
 ```python
 try:
-    client.write([{'range': 'Sheet1!A1', 'values': [[1, 2, 3]]}])
+    client.write('spreadsheet-id', [{'range': 'Sheet1!A1', 'values': [[1, 2, 3]]}])
 except AuthenticationError as e:
     print(f"Authentication failed: {e}")
 except RateLimitError as e:

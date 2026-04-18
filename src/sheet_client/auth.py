@@ -97,6 +97,7 @@ def get_credentials(credentials_path: Optional[str] = None,
             except Exception as e:
                 raise AuthenticationError(f"OAuth flow failed: {e}")
 
+        assert creds is not None
         try:
             with open(token_path, 'w') as token:
                 token.write(creds.to_json())

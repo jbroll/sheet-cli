@@ -179,7 +179,7 @@ Prefer the Write tool for generating the script (avoids heredoc approval prompts
 
 **Authentication:**
 - OAuth flow opens browser on first run
-- Token cached with pickle, auto-refreshes
+- Token cached as JSON at `~/.sheet-cli/token.json`, auto-refreshes
 - User grants access to their own sheets
 
 **Type Hints:**

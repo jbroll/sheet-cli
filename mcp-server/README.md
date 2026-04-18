@@ -17,8 +17,10 @@ Seven tools mirror the CLI verbs plus a raw batch-update escape hatch:
 | `sheets_move` | Move (server-side `cutPaste` / `moveDimension` when possible) |
 | `sheets_batch_update` | Raw `batchUpdate` for formatting / conditional rules / merges / etc. |
 
-All tools accept target strings in the unified grammar (`SID:Sheet!A1:B10`). See
-[../llms.txt](../llms.txt) for the full grammar and usage patterns.
+All tools accept target strings in the unified grammar (`SID:Sheet!A1:B10`),
+including the `.property` suffix for formatting, freeze, named ranges,
+conditional rules, etc. See [../llms.txt](../llms.txt) for the full grammar
+and usage patterns.
 
 **Guidance is embedded in tool descriptions** (see
 [AI_VISIBLE_GUIDANCE.md](AI_VISIBLE_GUIDANCE.md)) so agents receive it through
@@ -92,7 +94,8 @@ Delete or clear based on target shape (see table above).
 ### sheets_new
 
 Create spreadsheet / sheet / row / column. `side` applies only to row/column
-(`above`/`below` / `left`/`right`).
+(`above`/`below` / `left`/`right`). For property collections (`.conditional`,
+`.named.NAME`, `.merge`, `.protected`), pass the body via `data`.
 
 ### sheets_copy / sheets_move
 
