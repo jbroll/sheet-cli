@@ -56,11 +56,11 @@ Supported properties by scope:
 
 | Scope | Properties |
 |---|---|
-| spreadsheet | `title`, `named.NAME`, `parents` / `parents.FOLDER_ID` |
-| sheet | `title`, `freeze`, `color`, `hidden`, `conditional[i]` |
+| spreadsheet | `title`, `locale`, `timeZone`, `autoRecalc`, `theme`, `defaultFormat`, `iterativeCalc`, `named.NAME`, `parents` / `parents.FOLDER_ID` |
+| sheet | `title`, `index`, `freeze`, `color`, `hidden`, `hideGridlines`, `rightToLeft`, `rowCount`, `columnCount`, `filter`, `conditional[i]`, `protected` |
 | range | `format`, `borders`, `merge`, `note`, `validation`, `protected` |
-| row | `height` |
-| column | `width` |
+| row | `height`, `hidden`, `autofit` |
+| column | `width`, `hidden`, `autofit` |
 
 `.parents` is the only property that crosses into the Drive API — it lists,
 adds, or removes the Drive folder(s) that contain a spreadsheet.

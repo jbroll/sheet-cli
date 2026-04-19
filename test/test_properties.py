@@ -70,11 +70,23 @@ class TestRegistry:
 
     def test_supported_sheet(self):
         names = supported(TargetType.SHEET)
-        assert set(names) >= {"freeze", "color", "hidden", "title", "conditional"}
+        assert set(names) >= {
+            "freeze", "color", "hidden", "title", "conditional", "protected",
+            "hideGridlines", "index", "rightToLeft", "rowCount", "columnCount", "filter",
+        }
 
     def test_supported_spreadsheet(self):
         names = supported(TargetType.SPREADSHEET)
-        assert set(names) >= {"title", "named"}
+        assert set(names) >= {
+            "title", "named", "parents",
+            "locale", "timeZone", "autoRecalc", "theme", "defaultFormat", "iterativeCalc",
+        }
+
+    def test_supported_row(self):
+        assert set(supported(TargetType.ROW)) >= {"height", "hidden", "autofit"}
+
+    def test_supported_column(self):
+        assert set(supported(TargetType.COLUMN)) >= {"width", "hidden", "autofit"}
 
     def test_unknown_property_raises(self):
         c = _client()
@@ -263,6 +275,370 @@ class TestRangeProtected:
         result = dispatch("del", c, t, None)
         assert result == {"replies": []}
         assert not c.meta_write.called
+
+
+class TestSheetProtected:
+    def _meta(self, protected):
+        return {
+            "properties": {"title": "TB"},
+            "sheets": [{
+                "properties": {"sheetId": 42, "title": "Sheet1"},
+                "protectedRanges": protected,
+            }],
+        }
+
+    def test_put_empty_body_protects_whole_sheet(self):
+        c = _client()
+        t = _target(prop_name="protected")
+        dispatch("put", c, t, None)
+        req = c.meta_write.call_args[0][1][0]
+        assert req["addProtectedRange"]["protectedRange"] == {"range": {"sheetId": 42}}
+
+    def test_put_with_unprotected_ranges(self):
+        c = _client()
+        t = _target(prop_name="protected")
+        body = {
+            "description": "Sheet protected except header",
+            "warningOnly": False,
+            "unprotectedRanges": [
+                {"sheetId": 42, "startRowIndex": 0, "endRowIndex": 1},
+            ],
+        }
+        dispatch("put", c, t, body)
+        spec = c.meta_write.call_args[0][1][0]["addProtectedRange"]["protectedRange"]
+        assert spec["range"] == {"sheetId": 42}  # whole-sheet form
+        assert spec["description"] == "Sheet protected except header"
+        assert spec["unprotectedRanges"] == body["unprotectedRanges"]
+
+    def test_put_body_range_is_overwritten(self):
+        # Users may copy/paste a ProtectedRange with an existing `range`;
+        # we always force the whole-sheet form at this scope.
+        c = _client()
+        t = _target(prop_name="protected")
+        dispatch("put", c, t, {"range": {"sheetId": 999, "startRowIndex": 5}})
+        spec = c.meta_write.call_args[0][1][0]["addProtectedRange"]["protectedRange"]
+        assert spec["range"] == {"sheetId": 42}
+
+    def test_get_returns_only_whole_sheet_protections(self):
+        protected = [
+            {"protectedRangeId": 1, "range": {"sheetId": 42}},
+            {"protectedRangeId": 2, "range": {
+                "sheetId": 42, "startRowIndex": 0, "endRowIndex": 5,
+            }},
+            {"protectedRangeId": 3, "range": {"sheetId": 42},
+             "unprotectedRanges": [{"sheetId": 42, "startRowIndex": 0, "endRowIndex": 1}]},
+        ]
+        c = _client(meta=self._meta(protected))
+        t = _target(prop_name="protected")
+        got = dispatch("get", c, t, None)
+        assert [p["protectedRangeId"] for p in got] == [1, 3]
+
+    def test_del_removes_only_whole_sheet_protections(self):
+        protected = [
+            {"protectedRangeId": 1, "range": {"sheetId": 42}},
+            {"protectedRangeId": 2, "range": {
+                "sheetId": 42, "startRowIndex": 0, "endRowIndex": 5,
+            }},
+            {"protectedRangeId": 3, "range": {"sheetId": 42},
+             "unprotectedRanges": [{"sheetId": 42, "startRowIndex": 0, "endRowIndex": 1}]},
+        ]
+        c = _client(meta=self._meta(protected))
+        t = _target(prop_name="protected")
+        dispatch("del", c, t, None)
+        ids = [
+            r["deleteProtectedRange"]["protectedRangeId"]
+            for r in c.meta_write.call_args[0][1]
+        ]
+        assert ids == [1, 3]
+
+    def test_del_no_whole_sheet_protections_is_noop(self):
+        protected = [{"protectedRangeId": 2, "range": {
+            "sheetId": 42, "startRowIndex": 0, "endRowIndex": 5,
+        }}]
+        c = _client(meta=self._meta(protected))
+        t = _target(prop_name="protected")
+        result = dispatch("del", c, t, None)
+        assert result == {"replies": []}
+        assert not c.meta_write.called
+
+
+class TestSheetScalars:
+    """hideGridlines, index, rightToLeft, rowCount, columnCount."""
+
+    def _meta(self, grid_props=None, extra=None):
+        props = {
+            "sheetId": 42, "title": "Sheet1", "index": 0,
+            "gridProperties": grid_props or {"rowCount": 100, "columnCount": 26},
+        }
+        if extra:
+            props.update(extra)
+        return {
+            "properties": {"title": "TB"},
+            "sheets": [{"properties": props}],
+        }
+
+    def test_hideGridlines_put_true(self):
+        c = _client()
+        t = _target(prop_name="hideGridlines")
+        dispatch("put", c, t, True)
+        req = c.meta_write.call_args[0][1][0]["updateSheetProperties"]
+        assert req["properties"]["gridProperties"]["hideGridlines"] is True
+        assert req["fields"] == "gridProperties.hideGridlines"
+
+    def test_hideGridlines_del_sets_false(self):
+        c = _client()
+        t = _target(prop_name="hideGridlines")
+        dispatch("del", c, t, None)
+        gp = c.meta_write.call_args[0][1][0]["updateSheetProperties"]["properties"]["gridProperties"]
+        assert gp["hideGridlines"] is False
+
+    def test_hideGridlines_get(self):
+        c = _client(meta=self._meta(grid_props={"hideGridlines": True}))
+        t = _target(prop_name="hideGridlines")
+        assert dispatch("get", c, t, None) is True
+
+    def test_hideGridlines_get_defaults_false(self):
+        c = _client(meta=self._meta(grid_props={"rowCount": 100}))
+        t = _target(prop_name="hideGridlines")
+        assert dispatch("get", c, t, None) is False
+
+    def test_index_put(self):
+        c = _client()
+        t = _target(prop_name="index")
+        dispatch("put", c, t, 3)
+        req = c.meta_write.call_args[0][1][0]["updateSheetProperties"]
+        assert req["properties"]["index"] == 3
+        assert req["fields"] == "index"
+
+    def test_rightToLeft_put_bool(self):
+        c = _client()
+        t = _target(prop_name="rightToLeft")
+        dispatch("put", c, t, "true")
+        req = c.meta_write.call_args[0][1][0]["updateSheetProperties"]
+        assert req["properties"]["rightToLeft"] is True
+        assert req["fields"] == "rightToLeft"
+
+    def test_rowCount_put(self):
+        c = _client()
+        t = _target(prop_name="rowCount")
+        dispatch("put", c, t, 500)
+        req = c.meta_write.call_args[0][1][0]["updateSheetProperties"]
+        assert req["properties"]["gridProperties"]["rowCount"] == 500
+        assert req["fields"] == "gridProperties.rowCount"
+
+    def test_columnCount_put(self):
+        c = _client()
+        t = _target(prop_name="columnCount")
+        dispatch("put", c, t, 40)
+        req = c.meta_write.call_args[0][1][0]["updateSheetProperties"]
+        assert req["properties"]["gridProperties"]["columnCount"] == 40
+        assert req["fields"] == "gridProperties.columnCount"
+
+    def test_rowCount_get(self):
+        c = _client(meta=self._meta(grid_props={"rowCount": 250, "columnCount": 26}))
+        assert dispatch("get", c, _target(prop_name="rowCount"), None) == 250
+
+
+class TestSheetFilter:
+    def _meta(self, basic_filter=None):
+        props = {
+            "sheetId": 42, "title": "Sheet1",
+            "gridProperties": {"rowCount": 100, "columnCount": 26},
+        }
+        sheet = {"properties": props}
+        if basic_filter is not None:
+            sheet["basicFilter"] = basic_filter
+        return {"properties": {"title": "TB"}, "sheets": [sheet]}
+
+    def test_put_empty_body_defaults_range_to_whole_sheet(self):
+        c = _client()
+        t = _target(prop_name="filter")
+        dispatch("put", c, t, None)
+        req = c.meta_write.call_args[0][1][0]["setBasicFilter"]
+        assert req["filter"]["range"] == {"sheetId": 42}
+
+    def test_put_body_range_preserved(self):
+        c = _client()
+        t = _target(prop_name="filter")
+        dispatch("put", c, t, {
+            "range": {"sheetId": 42, "startRowIndex": 0, "endRowIndex": 10},
+            "sortSpecs": [{"dimensionIndex": 0, "sortOrder": "ASCENDING"}],
+        })
+        req = c.meta_write.call_args[0][1][0]["setBasicFilter"]
+        assert req["filter"]["range"]["endRowIndex"] == 10
+        assert req["filter"]["sortSpecs"][0]["sortOrder"] == "ASCENDING"
+
+    def test_put_rejects_non_dict(self):
+        c = _client()
+        t = _target(prop_name="filter")
+        with pytest.raises(GrammarError):
+            dispatch("put", c, t, "oops")
+
+    def test_del_emits_clearBasicFilter(self):
+        c = _client()
+        t = _target(prop_name="filter")
+        dispatch("del", c, t, None)
+        req = c.meta_write.call_args[0][1][0]
+        assert req == {"clearBasicFilter": {"sheetId": 42}}
+
+    def test_get_returns_filter_when_present(self):
+        bf = {"range": {"sheetId": 42}, "sortSpecs": []}
+        c = _client(meta=self._meta(basic_filter=bf))
+        t = _target(prop_name="filter")
+        assert dispatch("get", c, t, None) == bf
+
+    def test_get_returns_none_when_absent(self):
+        c = _client(meta=self._meta())
+        assert dispatch("get", c, _target(prop_name="filter"), None) is None
+
+
+class TestDimHidden:
+    def _grid(self, hidden_row=False, hidden_col=False):
+        return {
+            "sheets": [{
+                "properties": {"sheetId": 42, "title": "Sheet1"},
+                "data": [{
+                    "rowMetadata": [{"hiddenByUser": hidden_row}],
+                    "columnMetadata": [{"hiddenByUser": hidden_col}],
+                    "rowData": [],
+                }],
+            }],
+        }
+
+    def test_row_hidden_put(self):
+        c = _client()
+        t = Target("SID", "Sheet1", "5", PropertyRef("hidden"))
+        dispatch("put", c, t, True)
+        req = c.meta_write.call_args[0][1][0]["updateDimensionProperties"]
+        assert req["range"]["dimension"] == "ROWS"
+        assert req["range"]["startIndex"] == 4 and req["range"]["endIndex"] == 5
+        assert req["properties"]["hiddenByUser"] is True
+        assert req["fields"] == "hiddenByUser"
+
+    def test_column_hidden_put(self):
+        c = _client()
+        t = Target("SID", "Sheet1", "C", PropertyRef("hidden"))
+        dispatch("put", c, t, True)
+        req = c.meta_write.call_args[0][1][0]["updateDimensionProperties"]
+        assert req["range"]["dimension"] == "COLUMNS"
+        assert req["range"]["startIndex"] == 2 and req["range"]["endIndex"] == 3
+
+    def test_row_hidden_del_sets_false(self):
+        c = _client()
+        t = Target("SID", "Sheet1", "5", PropertyRef("hidden"))
+        dispatch("del", c, t, None)
+        props = c.meta_write.call_args[0][1][0]["updateDimensionProperties"]["properties"]
+        assert props["hiddenByUser"] is False
+
+    def test_row_hidden_get(self):
+        c = _client(read_reply=self._grid(hidden_row=True))
+        t = Target("SID", "Sheet1", "5", PropertyRef("hidden"))
+        assert dispatch("get", c, t, None) is True
+
+
+class TestDimAutofit:
+    def test_row_autofit_emits_autoResizeDimensions(self):
+        c = _client()
+        t = Target("SID", "Sheet1", "5", PropertyRef("autofit"))
+        dispatch("put", c, t, None)
+        req = c.meta_write.call_args[0][1][0]["autoResizeDimensions"]
+        assert req["dimensions"]["dimension"] == "ROWS"
+        assert req["dimensions"]["startIndex"] == 4
+
+    def test_column_autofit_emits_autoResizeDimensions(self):
+        c = _client()
+        t = Target("SID", "Sheet1", "C", PropertyRef("autofit"))
+        dispatch("put", c, t, None)
+        req = c.meta_write.call_args[0][1][0]["autoResizeDimensions"]
+        assert req["dimensions"]["dimension"] == "COLUMNS"
+        assert req["dimensions"]["startIndex"] == 2
+
+    def test_autofit_has_no_get_or_del(self):
+        c = _client()
+        t = Target("SID", "Sheet1", "5", PropertyRef("autofit"))
+        with pytest.raises(GrammarError, match="is not supported"):
+            dispatch("get", c, t, None)
+        with pytest.raises(GrammarError, match="is not supported"):
+            dispatch("del", c, t, None)
+
+
+class TestSpreadsheetScalars:
+    def _meta(self, properties):
+        return {"properties": properties, "sheets": []}
+
+    def test_locale_put(self):
+        c = _client()
+        t = Target("SID", None, None, PropertyRef("locale"))
+        dispatch("put", c, t, "en_GB")
+        req = c.meta_write.call_args[0][1][0]["updateSpreadsheetProperties"]
+        assert req["properties"]["locale"] == "en_GB"
+        assert req["fields"] == "locale"
+
+    def test_locale_put_rejects_empty(self):
+        c = _client()
+        t = Target("SID", None, None, PropertyRef("locale"))
+        with pytest.raises(GrammarError):
+            dispatch("put", c, t, "")
+
+    def test_timeZone_put(self):
+        c = _client()
+        t = Target("SID", None, None, PropertyRef("timeZone"))
+        dispatch("put", c, t, "Europe/Berlin")
+        req = c.meta_write.call_args[0][1][0]["updateSpreadsheetProperties"]
+        assert req["properties"]["timeZone"] == "Europe/Berlin"
+        assert req["fields"] == "timeZone"
+
+    def test_autoRecalc_put_valid(self):
+        c = _client()
+        t = Target("SID", None, None, PropertyRef("autoRecalc"))
+        dispatch("put", c, t, "on_change")
+        req = c.meta_write.call_args[0][1][0]["updateSpreadsheetProperties"]
+        assert req["properties"]["autoRecalc"] == "ON_CHANGE"
+
+    def test_autoRecalc_put_invalid(self):
+        c = _client()
+        t = Target("SID", None, None, PropertyRef("autoRecalc"))
+        with pytest.raises(GrammarError, match="autoRecalc must be"):
+            dispatch("put", c, t, "whenever")
+
+    def test_theme_put(self):
+        c = _client()
+        t = Target("SID", None, None, PropertyRef("theme"))
+        body = {"primaryFontFamily": "Roboto"}
+        dispatch("put", c, t, body)
+        req = c.meta_write.call_args[0][1][0]["updateSpreadsheetProperties"]
+        assert req["properties"]["spreadsheetTheme"] == body
+        assert req["fields"] == "spreadsheetTheme"
+
+    def test_theme_get(self):
+        theme = {"primaryFontFamily": "Roboto", "themeColors": []}
+        c = _client(meta=self._meta({"title": "TB", "spreadsheetTheme": theme}))
+        t = Target("SID", None, None, PropertyRef("theme"))
+        assert dispatch("get", c, t, None) == theme
+
+    def test_defaultFormat_put(self):
+        c = _client()
+        t = Target("SID", None, None, PropertyRef("defaultFormat"))
+        body = {"backgroundColor": {"red": 1.0}}
+        dispatch("put", c, t, body)
+        req = c.meta_write.call_args[0][1][0]["updateSpreadsheetProperties"]
+        assert req["properties"]["defaultFormat"] == body
+        assert req["fields"] == "defaultFormat"
+
+    def test_iterativeCalc_put(self):
+        c = _client()
+        t = Target("SID", None, None, PropertyRef("iterativeCalc"))
+        body = {"maxIterations": 100, "convergenceThreshold": 0.001}
+        dispatch("put", c, t, body)
+        req = c.meta_write.call_args[0][1][0]["updateSpreadsheetProperties"]
+        assert req["properties"]["iterativeCalculationSettings"] == body
+        assert req["fields"] == "iterativeCalculationSettings"
+
+    def test_theme_put_rejects_non_dict(self):
+        c = _client()
+        t = Target("SID", None, None, PropertyRef("theme"))
+        with pytest.raises(GrammarError):
+            dispatch("put", c, t, "nope")
 
 
 class TestRangeNote:

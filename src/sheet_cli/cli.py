@@ -143,7 +143,10 @@ def cmd_put(args):
         data: Any = args.value
     else:
         data = _read_data_from_stdin()
-        if data is None:
+        # Property targets may accept no body (e.g. ``.autofit``, empty
+        # ``.filter``, bare ``.protected``). Let the property layer decide.
+        # Value writes still require explicit data.
+        if data is None and target.property is None:
             print("put: no value given and no stdin", file=sys.stderr)
             sys.exit(1)
 

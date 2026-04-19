@@ -101,11 +101,13 @@ TARGET SHAPES:
 - 'SID:Sheet1!C'          → column C
 
 PROPERTIES (.property suffix on any target — always returns JSON):
-- spreadsheet:  .title, .named (list), .named.NAME (one), .parents (list), .parents.FID (one)
-- sheet:        .title, .freeze, .color, .hidden, .conditional (list), .conditional[i] (one)
+- spreadsheet:  .title, .locale, .timeZone, .autoRecalc, .theme, .defaultFormat, .iterativeCalc,
+                .named (list), .named.NAME (one), .parents (list), .parents.FID (one)
+- sheet:        .title, .index, .freeze, .color, .hidden, .hideGridlines, .rightToLeft,
+                .rowCount, .columnCount, .filter, .conditional (list), .conditional[i] (one), .protected
 - range:        .format, .borders, .merge, .note, .validation, .protected
-- row:          .height
-- column:       .width
+- row:          .height, .hidden, .autofit
+- column:       .width, .hidden, .autofit
 Examples: 'SID.title', 'SID:Sheet1.freeze', 'SID:Sheet1!A1:B2.format', 'SID.named.sales', 'SID.parents'.
 .parents is the only property that reads from the Drive API (folder membership).
 
@@ -231,6 +233,7 @@ PROPERTY APPENDS (collections only — pass `data`):
 - 'SID.named.NAME'          → data = 'Sheet1!A1:B100' or GridRange dict
 - 'SID:Sheet1!A1:B2.merge'  → data = 'MERGE_ALL' | 'MERGE_COLUMNS' | 'MERGE_ROWS' (default MERGE_ALL)
 - 'SID:Sheet1!A1:B2.protected' → data = ProtectedRange spec dict (range filled in for you)
+- 'SID:Sheet1.protected'       → data = ProtectedRange spec (range forced to whole sheet; use `unprotectedRanges` for cell exceptions)
 - 'SID.parents'             → data = folder-ID string or list (ADDS folders without removing existing)
 
 Use sheets_put for non-collection property writes.""",

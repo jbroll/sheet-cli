@@ -104,13 +104,27 @@ structure, or metadata of the resource. The same six verbs apply:
 
 ```
 SID.title                  spreadsheet title
+SID.locale                 IETF locale (e.g. "en_US")
+SID.timeZone               IANA time zone
+SID.autoRecalc             ON_CHANGE | MINUTE | HOUR
+SID.theme                  SpreadsheetTheme (primary font + themeColors)
+SID.defaultFormat          default CellFormat applied to empty cells
+SID.iterativeCalc          IterativeCalculationSettings
 SID.named.sales            a named range (keyed by name)
 SID.parents                Drive folder IDs containing the spreadsheet
 SID.parents.FOLDER_ID      membership of a specific folder
+SID:Sheet.title            sheet tab title
+SID:Sheet.index            tab position
 SID:Sheet.freeze           frozen rows / columns
 SID:Sheet.color            tab color
-SID:Sheet.hidden           visibility
+SID:Sheet.hidden           tab visibility
+SID:Sheet.hideGridlines    whether gridlines are hidden
+SID:Sheet.rightToLeft      RTL layout
+SID:Sheet.rowCount         grid row count
+SID:Sheet.columnCount      grid column count
+SID:Sheet.filter           basic filter (singleton per sheet)
 SID:Sheet.conditional[0]   conditional-format rule by index
+SID:Sheet.protected        whole-sheet protection (supports unprotectedRanges)
 SID:Sheet!A1:B2.format     cell format for a range
 SID:Sheet!A1:B2.borders    borders
 SID:Sheet!A1:B2.merge      merges
@@ -118,7 +132,11 @@ SID:Sheet!A1:B2.note       notes
 SID:Sheet!A1:B2.validation data validation
 SID:Sheet!A1:B2.protected  protected range
 SID:Sheet!5.height         row pixel height
+SID:Sheet!5.hidden         row visibility
+SID:Sheet!5.autofit        auto-resize row (put only)
 SID:Sheet!C.width          column pixel width
+SID:Sheet!C.hidden         column visibility
+SID:Sheet!C.autofit        auto-resize column (put only)
 ```
 
 `copy` and `move` do not accept `.property` targets. Scalar sugar works

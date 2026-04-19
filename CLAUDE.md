@@ -87,11 +87,11 @@ or index (`conditional[0]`).
 
 | Scope | Properties |
 |---|---|
-| spreadsheet | `title`, `named.NAME`, `parents` / `parents.FOLDER_ID` |
-| sheet | `title`, `freeze`, `color`, `hidden`, `conditional[i]` |
+| spreadsheet | `title`, `locale`, `timeZone`, `autoRecalc`, `theme`, `defaultFormat`, `iterativeCalc`, `named.NAME`, `parents` / `parents.FOLDER_ID` |
+| sheet | `title`, `index`, `freeze`, `color`, `hidden`, `hideGridlines`, `rightToLeft`, `rowCount`, `columnCount`, `filter`, `conditional[i]`, `protected` |
 | range | `format`, `borders`, `merge`, `note`, `validation`, `protected` |
-| row | `height` |
-| column | `width` |
+| row | `height`, `hidden`, `autofit` |
+| column | `width`, `hidden`, `autofit` |
 
 Scalar sugar: `put .freeze "2 1"`, `put .color "#ff00aa"`, `put .title "New"`,
 `put .named.sales "Sheet1!A1:B100"`, `put .parents FOLDER_ID`. Structured

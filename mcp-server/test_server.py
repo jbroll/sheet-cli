@@ -112,23 +112,18 @@ def test_mcp_server():
         print("   \u2713 grammar error routed")
 
         print("\n\u2705 All tests passed!")
-        return True
-
-    except AssertionError as e:
-        print(f"\n\u274c Test failed: {e}")
-        stderr = process.stderr.read() if process.stderr else ""
-        if stderr:
-            print(f"stderr:\n{stderr}")
-        return False
-    except Exception as e:
-        print(f"\n\u274c Unexpected: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
     finally:
         process.terminate()
         process.wait(timeout=5)
 
 
 if __name__ == "__main__":
-    sys.exit(0 if test_mcp_server() else 1)
+    try:
+        test_mcp_server()
+    except AssertionError as e:
+        print(f"\n\u274c Test failed: {e}")
+        sys.exit(1)
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)

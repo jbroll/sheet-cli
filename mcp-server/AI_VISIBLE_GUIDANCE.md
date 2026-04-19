@@ -27,11 +27,13 @@ TARGET SHAPES:
 - 'SID:Sheet1!C'          → column C
 
 PROPERTIES (.property suffix on any target — always returns JSON):
-- spreadsheet:  .title, .named (list), .named.NAME (one), .parents (list), .parents.FID (one)
-- sheet:        .title, .freeze, .color, .hidden, .conditional (list), .conditional[i] (one)
+- spreadsheet:  .title, .locale, .timeZone, .autoRecalc, .theme, .defaultFormat, .iterativeCalc,
+                .named (list), .named.NAME (one), .parents (list), .parents.FID (one)
+- sheet:        .title, .index, .freeze, .color, .hidden, .hideGridlines, .rightToLeft,
+                .rowCount, .columnCount, .filter, .conditional (list), .conditional[i] (one), .protected
 - range:        .format, .borders, .merge, .note, .validation, .protected
-- row:          .height
-- column:       .width
+- row:          .height, .hidden, .autofit
+- column:       .width, .hidden, .autofit
 Examples: 'SID.title', 'SID:Sheet1.freeze', 'SID:Sheet1!A1:B2.format', 'SID.named.sales', 'SID.parents'.
 .parents is the only property that reads from the Drive API (folder membership).
 

@@ -15,7 +15,7 @@ Add a new property type by writing one tiny handler set and calling
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from sheet_client import CellData, SheetsClient
@@ -140,10 +140,18 @@ def _read_target_sheet_grid(
     ``target.sheet`` — blindly taking ``sheets[0]`` would return data from the
     wrong sheet whenever the target isn't the first tab.
     """
-    assert target.spreadsheet_id is not None
+    sid = target.spreadsheet_id
+    assert sid is not None
+    # Sheets API values.get accepts A1 ranges, not bare dimension locators:
+    # "Sheet1!C" happens to work (interpreted as the whole column) but
+    # "Sheet1!3" is rejected. Expand bare row/column locators to "N:N"
+    # form so the API is happy. This mirrors what users would write by hand.
+    t_type = classify(target)
+    if t_type in (TargetType.ROW, TargetType.COLUMN) and ":" not in (target.locator or ""):
+        target = replace(target, locator=f"{target.locator}:{target.locator}")
     a1 = a1_range_for_locator(target)
     response = client.read(
-        target.spreadsheet_id,
+        sid,
         [a1],
         types=CellData.VALUE | CellData.FORMAT | CellData.NOTE,
     )
@@ -462,6 +470,73 @@ register(
 )
 
 
+def _is_whole_sheet_range(r: Dict[str, Any]) -> bool:
+    """A ProtectedRange covers the whole sheet iff its GridRange has no bounds.
+
+    The Sheets API's ``range: {sheetId}`` (no startRow/endRow/startColumn/
+    endColumn) is the shape behind the UI's "protect sheet — except these
+    cells" option. ``unprotectedRanges`` on the same ProtectedRange punches
+    the holes.
+    """
+    return not any(
+        k in r for k in ("startRowIndex", "endRowIndex", "startColumnIndex", "endColumnIndex")
+    )
+
+
+def _protected_sheet_list(client, target) -> List[Dict[str, Any]]:
+    """Return whole-sheet protections on the target sheet."""
+    assert target.spreadsheet_id is not None
+    sid = _sheet_id(client, target)
+    meta = client.meta_read(target.spreadsheet_id)
+    for sheet in meta.get("sheets", []):
+        if sheet.get("properties", {}).get("sheetId") != sid:
+            continue
+        return [
+            p for p in sheet.get("protectedRanges", []) or []
+            if _is_whole_sheet_range(p.get("range", {}))
+        ]
+    return []
+
+
+def _protected_sheet_get(client, target, _data):
+    return _protected_sheet_list(client, target)
+
+
+def _protected_sheet_put(client, target, data):
+    """Add a whole-sheet protection, optionally with cell exceptions.
+
+    Body JSON (``unprotectedRanges``, ``editors``, ``description``,
+    ``warningOnly``, ``requestingUserCanEdit``) passes through verbatim;
+    ``range`` is always overwritten to the whole-sheet form.
+    """
+    sid = _sheet_id(client, target)
+    spec = data if isinstance(data, dict) else {}
+    spec = {**spec, "range": {"sheetId": sid}}
+    return client.meta_write(target.spreadsheet_id, [{
+        "addProtectedRange": {"protectedRange": spec}
+    }])
+
+
+def _protected_sheet_del(client, target, _data):
+    """Delete whole-sheet protections; narrower range protections are untouched."""
+    existing = _protected_sheet_list(client, target)
+    requests = [
+        {"deleteProtectedRange": {"protectedRangeId": p["protectedRangeId"]}}
+        for p in existing
+        if "protectedRangeId" in p
+    ]
+    if not requests:
+        return {"replies": []}
+    return client.meta_write(target.spreadsheet_id, requests)
+
+
+register(
+    "protected", TargetType.SHEET,
+    get=_protected_sheet_get, put=_protected_sheet_put, new=_protected_sheet_put,
+    del_=_protected_sheet_del,
+)
+
+
 # ==========================================================================
 # sheet properties
 # ==========================================================================
@@ -603,6 +678,137 @@ def _sheet_title_put(client, target, data):
 register("title", TargetType.SHEET, get=_sheet_title_get, put=_sheet_title_put)
 
 
+# --- sheet scalar properties (hideGridlines, index, rightToLeft, row/columnCount) -----
+
+
+def _update_sheet_props(client, target, properties: Dict[str, Any], fields: str) -> Any:
+    """Emit a single updateSheetProperties request with ``sheetId`` filled in."""
+    sid = _sheet_id(client, target)
+    return client.meta_write(target.spreadsheet_id, [{
+        "updateSheetProperties": {
+            "properties": {"sheetId": sid, **properties},
+            "fields": fields,
+        }
+    }])
+
+
+def _hideGridlines_get(client, target, _data):
+    props = _sheet_props(client, target.spreadsheet_id, target.sheet)  # type: ignore[arg-type]
+    return bool(props.get("gridProperties", {}).get("hideGridlines", False))
+
+
+def _hideGridlines_put(client, target, data):
+    return _update_sheet_props(
+        client, target,
+        {"gridProperties": {"hideGridlines": _bool(data)}},
+        "gridProperties.hideGridlines",
+    )
+
+
+def _hideGridlines_del(client, target, _data):
+    return _hideGridlines_put(client, target, False)
+
+
+register(
+    "hideGridlines", TargetType.SHEET,
+    get=_hideGridlines_get, put=_hideGridlines_put, del_=_hideGridlines_del,
+)
+
+
+def _sheet_index_get(client, target, _data):
+    props = _sheet_props(client, target.spreadsheet_id, target.sheet)  # type: ignore[arg-type]
+    return int(props.get("index", 0))
+
+
+def _sheet_index_put(client, target, data):
+    return _update_sheet_props(client, target, {"index": int(data)}, "index")
+
+
+register("index", TargetType.SHEET, get=_sheet_index_get, put=_sheet_index_put)
+
+
+def _rtl_get(client, target, _data):
+    props = _sheet_props(client, target.spreadsheet_id, target.sheet)  # type: ignore[arg-type]
+    return bool(props.get("rightToLeft", False))
+
+
+def _rtl_put(client, target, data):
+    return _update_sheet_props(client, target, {"rightToLeft": _bool(data)}, "rightToLeft")
+
+
+def _rtl_del(client, target, _data):
+    return _rtl_put(client, target, False)
+
+
+register("rightToLeft", TargetType.SHEET, get=_rtl_get, put=_rtl_put, del_=_rtl_del)
+
+
+def _grid_count_get(field: str) -> Handler:
+    def _get(client, target, _data):
+        props = _sheet_props(client, target.spreadsheet_id, target.sheet)  # type: ignore[arg-type]
+        return props.get("gridProperties", {}).get(field)
+    return _get
+
+
+def _grid_count_put(field: str) -> Handler:
+    def _put(client, target, data):
+        return _update_sheet_props(
+            client, target,
+            {"gridProperties": {field: int(data)}},
+            f"gridProperties.{field}",
+        )
+    return _put
+
+
+register(
+    "rowCount", TargetType.SHEET,
+    get=_grid_count_get("rowCount"), put=_grid_count_put("rowCount"),
+)
+register(
+    "columnCount", TargetType.SHEET,
+    get=_grid_count_get("columnCount"), put=_grid_count_put("columnCount"),
+)
+
+
+# --- sheet.filter (basic filter, singleton per sheet) --------------------
+
+
+def _sheet_filter_get(client, target, _data):
+    assert target.spreadsheet_id is not None
+    sid = _sheet_id(client, target)
+    meta = client.meta_read(target.spreadsheet_id)
+    for sheet in meta.get("sheets", []):
+        if sheet.get("properties", {}).get("sheetId") == sid:
+            return sheet.get("basicFilter")
+    return None
+
+
+def _sheet_filter_put(client, target, data):
+    """Set the basic filter. Body is a BasicFilter; ``range`` defaults to whole sheet."""
+    if data is not None and not isinstance(data, dict):
+        raise GrammarError("put .filter requires a JSON object (BasicFilter) or no body")
+    sid = _sheet_id(client, target)
+    spec = dict(data) if isinstance(data, dict) else {}
+    if "range" not in spec:
+        spec["range"] = {"sheetId": sid}
+    return client.meta_write(target.spreadsheet_id, [{
+        "setBasicFilter": {"filter": spec}
+    }])
+
+
+def _sheet_filter_del(client, target, _data):
+    sid = _sheet_id(client, target)
+    return client.meta_write(target.spreadsheet_id, [{
+        "clearBasicFilter": {"sheetId": sid}
+    }])
+
+
+register(
+    "filter", TargetType.SHEET,
+    get=_sheet_filter_get, put=_sheet_filter_put, del_=_sheet_filter_del,
+)
+
+
 # --- sheet.conditional[i] -------------------------------------------------
 
 
@@ -741,6 +947,66 @@ register("height", TargetType.ROW, get=_dim_size_get("ROWS"), put=_dim_size_put(
 register("width", TargetType.COLUMN, get=_dim_size_get("COLUMNS"), put=_dim_size_put("COLUMNS"))
 
 
+def _dim_hidden_get(dimension: str) -> Handler:
+    def _get(client, target, _data):
+        block = _read_target_sheet_grid(client, target)
+        data = block.get("data", [])
+        if not data:
+            return False
+        key = "rowMetadata" if dimension == "ROWS" else "columnMetadata"
+        md = data[0].get(key, [])
+        return bool(md[0].get("hiddenByUser", False)) if md else False
+    return _get
+
+
+def _dim_hidden_put(dimension: str) -> Handler:
+    def _put(client, target, data):
+        dr = _dimension_range(client, target, dimension)
+        return client.meta_write(target.spreadsheet_id, [{
+            "updateDimensionProperties": {
+                "range": dr,
+                "properties": {"hiddenByUser": _bool(data)},
+                "fields": "hiddenByUser",
+            }
+        }])
+    return _put
+
+
+def _dim_hidden_del(dimension: str) -> Handler:
+    put = _dim_hidden_put(dimension)
+    def _del(client, target, _data):
+        return put(client, target, False)
+    return _del
+
+
+register(
+    "hidden", TargetType.ROW,
+    get=_dim_hidden_get("ROWS"), put=_dim_hidden_put("ROWS"), del_=_dim_hidden_del("ROWS"),
+)
+register(
+    "hidden", TargetType.COLUMN,
+    get=_dim_hidden_get("COLUMNS"), put=_dim_hidden_put("COLUMNS"), del_=_dim_hidden_del("COLUMNS"),
+)
+
+
+def _autofit_put(dimension: str) -> Handler:
+    """Trigger autoResizeDimensions for the target dimension.
+
+    This is imperative (an action, not a state), but ``put`` is the closest
+    verb fit — "put the dimension into auto-sized state". The body is ignored.
+    """
+    def _put(client, target, _data):
+        dr = _dimension_range(client, target, dimension)
+        return client.meta_write(target.spreadsheet_id, [{
+            "autoResizeDimensions": {"dimensions": dr}
+        }])
+    return _put
+
+
+register("autofit", TargetType.ROW, put=_autofit_put("ROWS"))
+register("autofit", TargetType.COLUMN, put=_autofit_put("COLUMNS"))
+
+
 # ==========================================================================
 # spreadsheet properties
 # ==========================================================================
@@ -763,6 +1029,77 @@ def _spreadsheet_title_put(client, target, data):
 
 
 register("title", TargetType.SPREADSHEET, get=_spreadsheet_title_get, put=_spreadsheet_title_put)
+
+
+# --- spreadsheet scalar properties (locale, timeZone, autoRecalc, …) -----
+
+
+def _ss_prop_get(field: str) -> Handler:
+    def _get(client, target, _data):
+        return client.meta_read(target.spreadsheet_id).get("properties", {}).get(field)
+    return _get
+
+
+def _ss_prop_put(field: str, coerce: Callable[[Any], Any]) -> Handler:
+    def _put(client, target, data):
+        return client.meta_write(target.spreadsheet_id, [{
+            "updateSpreadsheetProperties": {
+                "properties": {field: coerce(data)},
+                "fields": field,
+            }
+        }])
+    return _put
+
+
+def _require_nonempty_string(v: Any) -> str:
+    if not isinstance(v, str) or not v:
+        raise GrammarError("expected a non-empty string")
+    return v
+
+
+_AUTO_RECALC = ("ON_CHANGE", "MINUTE", "HOUR")
+
+
+def _coerce_autorecalc(v: Any) -> str:
+    s = _require_nonempty_string(v).upper()
+    if s not in _AUTO_RECALC:
+        raise GrammarError(f"autoRecalc must be one of {list(_AUTO_RECALC)}, got {v!r}")
+    return s
+
+
+def _require_dict(v: Any) -> Dict[str, Any]:
+    if not isinstance(v, dict):
+        raise GrammarError("expected a JSON object")
+    return v
+
+
+register(
+    "locale", TargetType.SPREADSHEET,
+    get=_ss_prop_get("locale"), put=_ss_prop_put("locale", _require_nonempty_string),
+)
+register(
+    "timeZone", TargetType.SPREADSHEET,
+    get=_ss_prop_get("timeZone"), put=_ss_prop_put("timeZone", _require_nonempty_string),
+)
+register(
+    "autoRecalc", TargetType.SPREADSHEET,
+    get=_ss_prop_get("autoRecalc"), put=_ss_prop_put("autoRecalc", _coerce_autorecalc),
+)
+register(
+    "theme", TargetType.SPREADSHEET,
+    get=_ss_prop_get("spreadsheetTheme"),
+    put=_ss_prop_put("spreadsheetTheme", _require_dict),
+)
+register(
+    "defaultFormat", TargetType.SPREADSHEET,
+    get=_ss_prop_get("defaultFormat"),
+    put=_ss_prop_put("defaultFormat", _require_dict),
+)
+register(
+    "iterativeCalc", TargetType.SPREADSHEET,
+    get=_ss_prop_get("iterativeCalculationSettings"),
+    put=_ss_prop_put("iterativeCalculationSettings", _require_dict),
+)
 
 
 # --- spreadsheet.named (collection keyed by name) -------------------------
