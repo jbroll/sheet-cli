@@ -632,3 +632,76 @@ class SheetsClient:
         """
         request = self.drive.files().delete(fileId=spreadsheet_id)
         self._execute_with_retry(request)
+
+    def copy_spreadsheet(self, source_spreadsheet_id: str,
+                         new_title: Optional[str] = None,
+                         parent_folder_id: Optional[str] = None) -> dict:
+        """Duplicate a whole spreadsheet via Drive ``files.copy``.
+
+        Server-side — the new file is created entirely inside Google's
+        infrastructure. Use this when you need a fresh spreadsheet with all
+        sheets, formatting, named ranges, and rules from ``source_spreadsheet_id``.
+
+        Args:
+            source_spreadsheet_id: ID of the spreadsheet to copy.
+            new_title: Name for the new file. When omitted, Drive defaults to
+                ``"Copy of <original name>"``.
+            parent_folder_id: Drive folder ID to place the copy in. When
+                omitted, the copy lands in the authenticated user's My Drive
+                root.
+
+        Returns:
+            ``{'spreadsheetId', 'spreadsheetUrl', 'name', 'parents'}`` — the
+            shape is aligned with ``create()`` so callers can treat it the
+            same way (store the ID, follow up with writes).
+        """
+        body: Dict[str, Any] = {}
+        if new_title:
+            body['name'] = new_title
+        if parent_folder_id:
+            body['parents'] = [parent_folder_id]
+
+        request = self.drive.files().copy(
+            fileId=source_spreadsheet_id,
+            body=body,
+            fields='id,name,parents',
+        )
+        response = self._execute_with_retry(request)
+        return {
+            'spreadsheetId': response['id'],
+            'spreadsheetUrl': f"https://docs.google.com/spreadsheets/d/{response['id']}",
+            'name': response.get('name'),
+            'parents': response.get('parents', []),
+        }
+
+    def get_parents(self, spreadsheet_id: str) -> List[str]:
+        """Return Drive folder IDs that contain this spreadsheet.
+
+        An ordinary file in My Drive typically has a single parent — the
+        user's root folder ID. Files in multiple folders (Drive's legacy
+        multi-parent feature) return all of them.
+        """
+        request = self.drive.files().get(
+            fileId=spreadsheet_id, fields='parents'
+        )
+        response = self._execute_with_retry(request)
+        return list(response.get('parents', []) or [])
+
+    def update_parents(self, spreadsheet_id: str,
+                       add: Optional[List[str]] = None,
+                       remove: Optional[List[str]] = None) -> dict:
+        """Add and/or remove Drive folder parents in one call.
+
+        Pass folder IDs in ``add`` to place the file in additional folders,
+        and ``remove`` to detach from folders. To move between folders, pass
+        both — Drive performs the swap atomically.
+
+        Returns the updated file metadata (``id``, ``parents``).
+        """
+        kwargs: Dict[str, Any] = {'fileId': spreadsheet_id, 'fields': 'id,parents'}
+        if add:
+            kwargs['addParents'] = ','.join(add)
+        if remove:
+            kwargs['removeParents'] = ','.join(remove)
+        request = self.drive.files().update(body={}, **kwargs)
+        return self._execute_with_retry(request)

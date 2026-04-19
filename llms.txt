@@ -56,11 +56,14 @@ Supported properties by scope:
 
 | Scope | Properties |
 |---|---|
-| spreadsheet | `title`, `named.NAME` |
+| spreadsheet | `title`, `named.NAME`, `parents` / `parents.FOLDER_ID` |
 | sheet | `title`, `freeze`, `color`, `hidden`, `conditional[i]` |
 | range | `format`, `borders`, `merge`, `note`, `validation`, `protected` |
 | row | `height` |
 | column | `width` |
+
+`.parents` is the only property that crosses into the Drive API — it lists,
+adds, or removes the Drive folder(s) that contain a spreadsheet.
 
 All six verbs apply uniformly to properties (where semantically meaningful).
 `copy` and `move` do not accept `.property` targets.
@@ -155,8 +158,16 @@ sheet-cli del SID:Sheet1.conditional[0]
 sheet-cli copy SID:Sheet1!A1:B10 :Sheet2!D1       # same-SS → copyPaste
 sheet-cli copy SID1:Sheet1 SID2                   # cross-SS sheet → copyTo
 sheet-cli copy SID1:Sheet1!A1:B2 SID2:Sheet1!D1   # fallback: read+write
+sheet-cli copy SID1 "Duplicate"                   # whole spreadsheet → Drive files.copy
+sheet-cli copy SID1 ""                            # whole spreadsheet, default "Copy of ..." title
 sheet-cli move SID:Sheet1!5 !2                    # moveDimension
 sheet-cli move SID:Sheet1!A1:B2 :Sheet2!D1        # cutPaste
+
+# Drive folder membership (.parents)
+sheet-cli get SID.parents                         # list folder IDs containing this spreadsheet
+sheet-cli put SID.parents FOLDER_ID               # move to folder (replaces parent set)
+sheet-cli new SID.parents FOLDER_ID               # add a parent folder
+sheet-cli del SID.parents.FOLDER_ID               # remove a specific folder
 ```
 
 ## Dispatch table (copy / move)
@@ -166,6 +177,7 @@ sheet-cli move SID:Sheet1!A1:B2 :Sheet2!D1        # cutPaste
 | RANGE | RANGE | yes | `copyPaste` (copy) / `cutPaste` (move) — server-side |
 | ROW/COL | ROW/COL (same sheet) | yes | `moveDimension` — server-side |
 | SHEET | SPREADSHEET | no | `spreadsheets.sheets.copyTo` — server-side |
+| SPREADSHEET | SPREADSHEET / DRIVE | — | Drive `files.copy` — server-side (dest SID is treated as the new title) |
 | RANGE / SHEET | RANGE / SHEET | no | read + write fallback (move also clears source) |
 
 ## Bulk writes — recommended pattern for agents

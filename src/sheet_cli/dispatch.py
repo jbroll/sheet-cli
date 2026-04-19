@@ -48,6 +48,19 @@ def do_copy(client: SheetsClient, source: Target, dest: Target) -> Dict[str, Any
     src_type = classify(source)
     dst_type = classify(dest)
 
+    # Whole-spreadsheet copy (Drive ``files.copy``): source is a spreadsheet,
+    # dest is either another "spreadsheet" (interpreted as the new title) or
+    # bare DRIVE (default "Copy of ..." title). Copying onto itself would be
+    # a no-op aliasing bug, so identical SIDs are rejected. Evaluated before
+    # the "both SIDs required" guard so DRIVE dest (SID=None) is accepted.
+    if src_type == TargetType.SPREADSHEET and dst_type in (TargetType.SPREADSHEET, TargetType.DRIVE):
+        if source.spreadsheet_id is None:
+            raise GrammarError("copy requires a spreadsheet ID on the source")
+        if dst_type == TargetType.SPREADSHEET and source.spreadsheet_id == dest.spreadsheet_id:
+            raise GrammarError("copy: source and destination spreadsheet IDs are the same")
+        new_title = dest.spreadsheet_id if dst_type == TargetType.SPREADSHEET else None
+        return client.copy_spreadsheet(source.spreadsheet_id, new_title=new_title)
+
     if source.spreadsheet_id is None or dest.spreadsheet_id is None:
         raise GrammarError("copy requires spreadsheet_id on both operands")
 

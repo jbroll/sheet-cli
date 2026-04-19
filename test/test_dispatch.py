@@ -38,6 +38,44 @@ class TestDoCopy:
         client.read.assert_not_called()
         client.write.assert_not_called()
 
+    def test_whole_spreadsheet_copy_uses_drive_files_copy(self, client):
+        """SPREADSHEET → SPREADSHEET (dest SID slot is a title) triggers Drive files.copy."""
+        src = Target("SID1", None, None)
+        dst = Target("New Title", None, None)
+        client.copy_spreadsheet.return_value = {
+            "spreadsheetId": "NEW_SID",
+            "spreadsheetUrl": "https://docs.google.com/spreadsheets/d/NEW_SID",
+            "name": "New Title",
+            "parents": [],
+        }
+        result = do_copy(client, src, dst)
+        client.copy_spreadsheet.assert_called_once_with("SID1", new_title="New Title")
+        # Must NOT fall into sheet-level paths.
+        client.copy_sheet_to.assert_not_called()
+        client.meta_write.assert_not_called()
+        assert result["spreadsheetId"] == "NEW_SID"
+
+    def test_whole_spreadsheet_copy_to_drive_uses_default_title(self, client):
+        """SPREADSHEET → DRIVE (bare empty dest) uses Drive's default 'Copy of ...' name."""
+        src = Target("SID1", None, None)
+        dst = Target(None, None, None)
+        client.copy_spreadsheet.return_value = {
+            "spreadsheetId": "NEW_SID",
+            "spreadsheetUrl": "https://docs.google.com/spreadsheets/d/NEW_SID",
+            "name": "Copy of Original",
+            "parents": [],
+        }
+        do_copy(client, src, dst)
+        client.copy_spreadsheet.assert_called_once_with("SID1", new_title=None)
+
+    def test_whole_spreadsheet_copy_rejects_self(self, client):
+        """Copying a spreadsheet onto its own ID is a no-op aliasing bug — refuse."""
+        src = Target("SID1", None, None)
+        dst = Target("SID1", None, None)
+        with pytest.raises(GrammarError, match="same"):
+            do_copy(client, src, dst)
+        client.copy_spreadsheet.assert_not_called()
+
     def test_same_spreadsheet_range_uses_copyPaste(self, client):
         src = Target("SID", "Sheet1", "A1:B2")
         dst = Target("SID", "Sheet2", "D1:E2")

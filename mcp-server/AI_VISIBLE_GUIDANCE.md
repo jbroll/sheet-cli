@@ -27,12 +27,13 @@ TARGET SHAPES:
 - 'SID:Sheet1!C'          → column C
 
 PROPERTIES (.property suffix on any target — always returns JSON):
-- spreadsheet:  .title, .named (list), .named.NAME (one)
+- spreadsheet:  .title, .named (list), .named.NAME (one), .parents (list), .parents.FID (one)
 - sheet:        .title, .freeze, .color, .hidden, .conditional (list), .conditional[i] (one)
 - range:        .format, .borders, .merge, .note, .validation, .protected
 - row:          .height
 - column:       .width
-Examples: 'SID.title', 'SID:Sheet1.freeze', 'SID:Sheet1!A1:B2.format', 'SID.named.sales'.
+Examples: 'SID.title', 'SID:Sheet1.freeze', 'SID:Sheet1!A1:B2.format', 'SID.named.sales', 'SID.parents'.
+.parents is the only property that reads from the Drive API (folder membership).
 
 FORMAT:
 - 'json' (default): raw Google API response as-is
@@ -73,6 +74,7 @@ PROPERTY WRITES (target carries .property suffix):
 - '.conditional[i]' (replace at index)
                             → ConditionalFormatRule
 - '.named.NAME'             → 'Sheet1!A1:B100' (A1) or a GridRange dict
+- '.parents'                → folder-ID string or list (REPLACES parent set — use to move between folders)
 - '.height' / '.width'      → integer pixel size
 Property responses are always JSON. Use sheets_get '.property' first to inspect current state.
 
@@ -103,6 +105,7 @@ PROPERTY DELETES (.property suffix): reset / clear the property in place
 - '.named.NAME' → remove that named range
 - '.conditional' (no key) → delete every rule on the sheet
 - '.conditional[i]' → delete that rule
+- '.parents.FOLDER_ID' → detach from that folder (unkeyed '.parents' is refused — would orphan the file)
 ```
 
 ---
@@ -126,6 +129,7 @@ PROPERTY APPENDS (collections only — pass `data`):
 - 'SID.named.NAME'          → data = 'Sheet1!A1:B100' or GridRange dict
 - 'SID:Sheet1!A1:B2.merge'  → data = 'MERGE_ALL' | 'MERGE_COLUMNS' | 'MERGE_ROWS' (default MERGE_ALL)
 - 'SID:Sheet1!A1:B2.protected' → data = ProtectedRange spec dict (range filled in for you)
+- 'SID.parents'             → data = folder-ID string or list (ADDS folders without removing existing)
 
 Use sheets_put for non-collection property writes.
 ```
@@ -138,9 +142,10 @@ Copy source to dest. Uses server-side APIs when possible.
 
 ```
 DISPATCH TABLE:
-- same spreadsheet, RANGE→RANGE   → copyPaste    (server-side, no data transfer)
-- cross spreadsheet, whole SHEET  → sheets.copyTo (server-side, no data transfer)
-- other shapes                    → read + write fallback
+- same spreadsheet, RANGE→RANGE     → copyPaste    (server-side, no data transfer)
+- cross spreadsheet, whole SHEET    → sheets.copyTo (server-side, no data transfer)
+- SPREADSHEET → SPREADSHEET / DRIVE → Drive files.copy (server-side; dest SID is treated as the new title, '' for default "Copy of ...")
+- other shapes                       → read + write fallback
 
 INHERITANCE: dest can omit components to inherit from source:
 - 'Sheet2!D1'    → same SID as source, different sheet

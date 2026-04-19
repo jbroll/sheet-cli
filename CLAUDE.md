@@ -87,17 +87,25 @@ or index (`conditional[0]`).
 
 | Scope | Properties |
 |---|---|
-| spreadsheet | `title`, `named.NAME` |
+| spreadsheet | `title`, `named.NAME`, `parents` / `parents.FOLDER_ID` |
 | sheet | `title`, `freeze`, `color`, `hidden`, `conditional[i]` |
 | range | `format`, `borders`, `merge`, `note`, `validation`, `protected` |
 | row | `height` |
 | column | `width` |
 
 Scalar sugar: `put .freeze "2 1"`, `put .color "#ff00aa"`, `put .title "New"`,
-`put .named.sales "Sheet1!A1:B100"`. Structured bodies (format, borders,
-validation, conditional rules) come from stdin as JSON matching the
-corresponding Sheets API request type. `copy` / `move` do not accept
-`.property` targets.
+`put .named.sales "Sheet1!A1:B100"`, `put .parents FOLDER_ID`. Structured
+bodies (format, borders, validation, conditional rules) come from stdin as
+JSON matching the corresponding Sheets API request type. `copy` / `move`
+do not accept `.property` targets.
+
+`.parents` is the only property that routes through the Drive API —
+everything else is pure Sheets API. Use it to inspect or change which
+Drive folder(s) contain a spreadsheet (`get/put/new/del SID.parents[.FID]`).
+
+Whole-spreadsheet copy (`copy SID "Title"` or `copy SID ""`) routes
+through Drive `files.copy` — the destination SID slot is interpreted as
+the new file's title, or DRIVE for a default `"Copy of …"` name.
 
 ## How You Use This
 

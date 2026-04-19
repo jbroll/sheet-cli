@@ -866,6 +866,87 @@ register(
 )
 
 
+# --- spreadsheet.parents (Drive folder membership) -----------------------
+# The only property that crosses from the Sheets API into Drive. Folder
+# membership is a Drive file-level concept; we expose it here so the same
+# six verbs work uniformly on it. Keys in `.parents.FID` are Drive folder
+# IDs.
+
+
+def _parents_get(client, target, _data):
+    assert target.spreadsheet_id is not None
+    key = target.property.key if target.property else None
+    parents = client.get_parents(target.spreadsheet_id)
+    if key is None:
+        return parents
+    # Keyed get is a membership test — return the id if present, else raise
+    # (mirrors `.named.NAME` behaviour so callers can rely on missing-key
+    # being an explicit error rather than a silent empty result).
+    if key in parents:
+        return key
+    raise GrammarError(f"folder {key!r} is not a parent of {target.spreadsheet_id}")
+
+
+def _parents_as_list(data: Any) -> List[str]:
+    if isinstance(data, str):
+        return [data]
+    if isinstance(data, list):
+        if not all(isinstance(x, str) for x in data):
+            raise GrammarError("parents list must contain folder-ID strings")
+        return list(data)
+    raise GrammarError(
+        f"parents value must be a folder ID string or list of strings, got {type(data).__name__}"
+    )
+
+
+def _parents_put(client, target, data):
+    """Replace the parent set with the supplied folder IDs."""
+    assert target.spreadsheet_id is not None
+    new_parents = _parents_as_list(data)
+    if not new_parents:
+        raise GrammarError("put .parents requires at least one folder ID")
+    existing = client.get_parents(target.spreadsheet_id)
+    add = [p for p in new_parents if p not in existing]
+    remove = [p for p in existing if p not in new_parents]
+    return client.update_parents(target.spreadsheet_id, add=add, remove=remove)
+
+
+def _parents_new(client, target, data):
+    """Append folder(s) to the parent set (Drive supports multi-parent)."""
+    assert target.spreadsheet_id is not None
+    new_parents = _parents_as_list(data)
+    if not new_parents:
+        raise GrammarError("new .parents requires a folder ID")
+    return client.update_parents(target.spreadsheet_id, add=new_parents)
+
+
+def _parents_del(client, target, _data):
+    """Remove one (keyed) or all (unkeyed) parents.
+
+    Unkeyed deletion strips every parent — the file becomes orphaned in
+    Drive's root, which is rarely what you want. We surface it as an
+    error so the caller has to be explicit (``del SID.parents.FID`` for
+    targeted removal, or ``put`` to replace the set).
+    """
+    assert target.spreadsheet_id is not None
+    key = target.property.key if target.property else None
+    if key is None:
+        raise GrammarError(
+            "del .parents requires a folder ID (would orphan the file); "
+            "use del SID.parents.FOLDER_ID"
+        )
+    existing = client.get_parents(target.spreadsheet_id)
+    if key not in existing:
+        raise GrammarError(f"folder {key!r} is not a parent of {target.spreadsheet_id}")
+    return client.update_parents(target.spreadsheet_id, remove=[key])
+
+
+register(
+    "parents", TargetType.SPREADSHEET,
+    get=_parents_get, put=_parents_put, new=_parents_new, del_=_parents_del,
+)
+
+
 # ==========================================================================
 # public helpers
 # ==========================================================================

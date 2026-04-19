@@ -64,7 +64,10 @@ client = SheetsClient(
 | `meta_write(spreadsheet_id, requests)` | Write metadata/structure (batchUpdate) |
 | `create(title, sheets)` | Create a new spreadsheet |
 | `copy_sheet_to(source_id, source_sheet_id, dest_id)` | Server-side sheet copy across spreadsheets |
+| `copy_spreadsheet(source_id, new_title, parent_folder_id)` | Duplicate a whole spreadsheet via Drive `files.copy` |
 | `delete_spreadsheet(spreadsheet_id)` | Delete a spreadsheet via Drive API |
+| `get_parents(spreadsheet_id)` | List Drive folder IDs containing the spreadsheet |
+| `update_parents(spreadsheet_id, add, remove)` | Add/remove Drive folder parents (files.update) |
 
 All per-spreadsheet methods require `spreadsheet_id` as the first parameter.
 
@@ -956,6 +959,77 @@ def delete_spreadsheet(spreadsheet_id: str) -> None
 ```
 
 Used by `sheet-cli del SID` at the spreadsheet level.
+
+---
+
+## copy_spreadsheet()
+
+Duplicate a whole spreadsheet via Drive `files.copy`. Server-side — data
+never leaves Google's infrastructure.
+
+```python
+def copy_spreadsheet(
+    source_spreadsheet_id: str,
+    new_title: Optional[str] = None,
+    parent_folder_id: Optional[str] = None,
+) -> dict
+```
+
+**Parameters:**
+- `source_spreadsheet_id` — spreadsheet to copy
+- `new_title` — name for the new file (defaults to `"Copy of <original>"`)
+- `parent_folder_id` — Drive folder to place the copy in (defaults to the user's My Drive root)
+
+**Returns:** `{'spreadsheetId', 'spreadsheetUrl', 'name', 'parents'}` — shape aligns with `create()`.
+
+**Example:**
+```python
+new = client.copy_spreadsheet(source_id, new_title="Q3 Backup")
+print(new['spreadsheetUrl'])
+```
+
+Used by `sheet-cli copy SID "Title"` and `sheet-cli copy SID ""`.
+
+---
+
+## get_parents()
+
+Return the Drive folder IDs that contain a spreadsheet.
+
+```python
+def get_parents(spreadsheet_id: str) -> List[str]
+```
+
+Usually a single folder (My Drive root or a user folder). Files in multiple
+folders (Drive's legacy multi-parent feature) return all of them.
+
+---
+
+## update_parents()
+
+Add and/or remove Drive folder parents in one call.
+
+```python
+def update_parents(
+    spreadsheet_id: str,
+    add: Optional[List[str]] = None,
+    remove: Optional[List[str]] = None,
+) -> dict
+```
+
+**Parameters:**
+- `add` — folder IDs to place the file in
+- `remove` — folder IDs to detach from
+
+Pass both to move between folders atomically. Used by the `.parents`
+property handlers (`get/put/new/del SID.parents[.FOLDER_ID]`).
+
+**Example:**
+```python
+# Move to a specific folder (replace all existing parents)
+existing = client.get_parents(sid)
+client.update_parents(sid, add=["NEW_FOLDER_ID"], remove=existing)
+```
 
 ---
 

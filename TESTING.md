@@ -46,10 +46,13 @@ sugar, cell-keyed dict auto-qualified with target sheet, range-keyed dict,
 bare 2D array, `!`-qualified keys pass through. Error cases for DRIVE /
 SPREADSHEET puts, bad sides on row/column new, range on new.
 
-**`test_dispatch.py`** — the six copy/move branches:
+**`test_dispatch.py`** — the copy/move branches:
 - copy cross-spreadsheet whole sheet → `sheets.copyTo` (server-side)
 - copy same-spreadsheet range → `copyPaste` batch (server-side)
 - copy cross-spreadsheet range → read + write fallback
+- copy whole spreadsheet → `drive.files.copy` (server-side; accepts a new
+  title or empty DRIVE dest for the default "Copy of …")
+- copy rejects self-copy when source and dest SID match
 - move same-sheet row/col → `moveDimension` (server-side)
 - move same-spreadsheet range → `cutPaste` (server-side)
 - move cross-spreadsheet → copy + delete fallback
@@ -62,9 +65,12 @@ error exit code 2, inheritance in copy/move second operand.
 **`test_properties.py`** — `.property` handler dispatch for every registered
 (name, scope) pair: range-level (format, borders, merge, note, validation,
 protected), sheet-level (title, freeze, color, hidden, conditional[i]),
-spreadsheet-level (title, named.NAME), and dimension-level (height, width).
-Verifies verb wiring (`get`/`put`/`del`/`new`), scalar sugar, structured
-JSON bodies, and that `copy`/`move` reject `.property` targets.
+spreadsheet-level (title, named.NAME, parents / parents.FOLDER_ID), and
+dimension-level (height, width). Verifies verb wiring (`get`/`put`/`del`/
+`new`), scalar sugar, structured JSON bodies, collection semantics
+(`put .parents` replaces via diff, `new .parents` adds, keyed `del` removes
+one, unkeyed `del .parents` is refused to prevent orphaning), and that
+`copy`/`move` reject `.property` targets.
 
 **`test_retry.py`** — 429/500/503 exhaust retries, 400/404 no-retry, success
 path, and `clear()` → `batchClear`.

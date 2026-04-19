@@ -105,6 +105,8 @@ structure, or metadata of the resource. The same six verbs apply:
 ```
 SID.title                  spreadsheet title
 SID.named.sales            a named range (keyed by name)
+SID.parents                Drive folder IDs containing the spreadsheet
+SID.parents.FOLDER_ID      membership of a specific folder
 SID:Sheet.freeze           frozen rows / columns
 SID:Sheet.color            tab color
 SID:Sheet.hidden           visibility
@@ -121,7 +123,9 @@ SID:Sheet!C.width          column pixel width
 
 `copy` and `move` do not accept `.property` targets. Scalar sugar works
 for simple properties (`put .freeze "2 1"`, `put .color "#ff00aa"`,
-`put .title "New"`); structured request bodies come from stdin as JSON.
+`put .title "New"`, `put .parents FOLDER_ID`); structured request bodies
+come from stdin as JSON. `.parents` is the only property that routes
+through the Drive API (everything else is pure Sheets API).
 
 ### Examples
 
@@ -157,8 +161,18 @@ sheet-cli copy SID:Sheet1!A1:B10 :Sheet2!D1
 # Copy a whole sheet across spreadsheets (server-side via sheets.copyTo)
 sheet-cli copy SID1:Sheet1 SID2
 
+# Duplicate a whole spreadsheet (server-side via Drive files.copy)
+sheet-cli copy SID "Q3 Backup"
+sheet-cli copy SID ""           # default "Copy of ..." title
+
 # Move a row
 sheet-cli move SID:Sheet1!5 !2
+
+# Drive folder membership
+sheet-cli get SID.parents                 # list folder IDs
+sheet-cli put SID.parents FOLDER_ID       # move to a folder (replace)
+sheet-cli new SID.parents FOLDER_ID       # add a folder (no remove)
+sheet-cli del SID.parents.FOLDER_ID       # remove a specific folder
 
 # Properties
 sheet-cli put SID.title "Q3 Report"
@@ -186,7 +200,10 @@ Complete API reference in API.md:
 - `meta_write(spreadsheet_id, requests)` - Raw batchUpdate for formatting/structure
 - `create(title, sheets=None)` - Create a new spreadsheet
 - `copy_sheet_to(source_id, source_sheet_id, dest_id)` - Server-side sheet copy between spreadsheets
+- `copy_spreadsheet(source_id, new_title=None, parent_folder_id=None)` - Duplicate a whole spreadsheet via Drive `files.copy`
 - `delete_spreadsheet(spreadsheet_id)` - Delete a spreadsheet via Drive API
+- `get_parents(spreadsheet_id)` - List Drive folder parents of a spreadsheet
+- `update_parents(spreadsheet_id, add=None, remove=None)` - Add/remove Drive folder parents
 - `list_spreadsheets(include_shared_drives=False)` - List spreadsheets via Drive API
 
 Utility functions:

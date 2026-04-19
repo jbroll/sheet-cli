@@ -105,8 +105,11 @@ Binary verbs. `dest` can omit components to inherit from `source`:
 - `!D1` → same SID + same sheet
 - `:Sheet2` → same SID, different sheet
 
-Dispatch chooses `copyPaste`, `cutPaste`, `moveDimension`, or `sheets.copyTo`
-where possible; falls back to read+write for cross-spreadsheet ranges.
+Dispatch chooses `copyPaste`, `cutPaste`, `moveDimension`, `sheets.copyTo`,
+or Drive `files.copy` where possible; falls back to read+write for
+cross-spreadsheet ranges. For a whole-spreadsheet duplicate, pass a
+spreadsheet-shaped source and a title (or `""` for Drive's default) as
+dest — e.g. `sheets_copy "SID" "Backup"`.
 
 ### sheets_batch_update
 

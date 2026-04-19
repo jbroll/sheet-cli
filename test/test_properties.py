@@ -524,6 +524,103 @@ class TestNamedRanges:
             dispatch("del", c, t, None)
 
 
+# ---------------------------- parents (Drive folders) --------------------
+
+
+class TestParents:
+    """``.parents`` crosses into the Drive API — verify all four verbs call
+    the right SheetsClient helpers with the right folder IDs."""
+
+    def _client_with_parents(self, parents):
+        c = _client()
+        c.get_parents = MagicMock(return_value=list(parents))
+        c.update_parents = MagicMock(return_value={"id": "SID", "parents": list(parents)})
+        return c
+
+    def test_get_returns_full_list(self):
+        c = self._client_with_parents(["FOLDER_A", "FOLDER_B"])
+        t = Target("SID", None, None, PropertyRef("parents"))
+        assert dispatch("get", c, t, None) == ["FOLDER_A", "FOLDER_B"]
+        c.get_parents.assert_called_once_with("SID")
+
+    def test_get_keyed_returns_folder_if_member(self):
+        c = self._client_with_parents(["FOLDER_A"])
+        t = Target("SID", None, None, PropertyRef("parents", "FOLDER_A"))
+        assert dispatch("get", c, t, None) == "FOLDER_A"
+
+    def test_get_keyed_missing_raises(self):
+        c = self._client_with_parents(["FOLDER_A"])
+        t = Target("SID", None, None, PropertyRef("parents", "GHOST"))
+        with pytest.raises(GrammarError, match="not a parent"):
+            dispatch("get", c, t, None)
+
+    def test_put_string_replaces_all_parents(self):
+        """`put .parents FID` is a move: new folder added, old folders removed."""
+        c = self._client_with_parents(["OLD_A", "OLD_B"])
+        t = Target("SID", None, None, PropertyRef("parents"))
+        dispatch("put", c, t, "NEW")
+        c.update_parents.assert_called_once_with("SID", add=["NEW"], remove=["OLD_A", "OLD_B"])
+
+    def test_put_list_replaces_parent_set(self):
+        c = self._client_with_parents(["KEEP", "DROP"])
+        t = Target("SID", None, None, PropertyRef("parents"))
+        dispatch("put", c, t, ["KEEP", "NEW"])
+        # Only the diff is sent — KEEP already in place, DROP removed, NEW added.
+        c.update_parents.assert_called_once_with("SID", add=["NEW"], remove=["DROP"])
+
+    def test_put_empty_list_rejected(self):
+        """Replacing with nothing would orphan the file — require explicit intent."""
+        c = self._client_with_parents(["A"])
+        t = Target("SID", None, None, PropertyRef("parents"))
+        with pytest.raises(GrammarError, match="at least one"):
+            dispatch("put", c, t, [])
+        c.update_parents.assert_not_called()
+
+    def test_put_invalid_type_raises(self):
+        c = self._client_with_parents(["A"])
+        t = Target("SID", None, None, PropertyRef("parents"))
+        with pytest.raises(GrammarError, match="folder ID"):
+            dispatch("put", c, t, 42)
+
+    def test_new_adds_without_touching_existing(self):
+        c = self._client_with_parents(["EXISTING"])
+        t = Target("SID", None, None, PropertyRef("parents"))
+        dispatch("new", c, t, "ADDED")
+        c.update_parents.assert_called_once_with("SID", add=["ADDED"])
+        # Must NOT consult get_parents — add is purely additive.
+        c.get_parents.assert_not_called()
+
+    def test_new_list_adds_multiple(self):
+        c = self._client_with_parents([])
+        t = Target("SID", None, None, PropertyRef("parents"))
+        dispatch("new", c, t, ["A", "B"])
+        c.update_parents.assert_called_once_with("SID", add=["A", "B"])
+
+    def test_del_keyed_removes_one(self):
+        c = self._client_with_parents(["KEEP", "REMOVE"])
+        t = Target("SID", None, None, PropertyRef("parents", "REMOVE"))
+        dispatch("del", c, t, None)
+        c.update_parents.assert_called_once_with("SID", remove=["REMOVE"])
+
+    def test_del_keyed_missing_raises(self):
+        c = self._client_with_parents(["KEEP"])
+        t = Target("SID", None, None, PropertyRef("parents", "GHOST"))
+        with pytest.raises(GrammarError, match="not a parent"):
+            dispatch("del", c, t, None)
+        c.update_parents.assert_not_called()
+
+    def test_del_unkeyed_refuses_orphan(self):
+        """Removing all parents leaves the file orphaned — require a folder ID."""
+        c = self._client_with_parents(["A", "B"])
+        t = Target("SID", None, None, PropertyRef("parents"))
+        with pytest.raises(GrammarError, match="would orphan"):
+            dispatch("del", c, t, None)
+        c.update_parents.assert_not_called()
+
+    def test_supported_includes_parents(self):
+        assert "parents" in supported(TargetType.SPREADSHEET)
+
+
 # ---------------------------- conditional rules ---------------------------
 
 
