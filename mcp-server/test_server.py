@@ -117,6 +117,58 @@ def test_mcp_server():
         process.wait(timeout=5)
 
 
+def _start_server():
+    process = subprocess.Popen(
+        [VENV_PYTHON, SERVER_PATH],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+        cwd=PROJECT_ROOT,
+    )
+    send_request(process, {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
+    return process
+
+
+def test_sheets_get_folder_id_accepted():
+    """sheets_get with folder_id + empty target must not return a grammar error."""
+    process = _start_server()
+    try:
+        resp = send_request(process, {
+            "jsonrpc": "2.0", "id": 2,
+            "method": "tools/call",
+            "params": {"name": "sheets_get", "arguments": {"target": "", "folder_id": "FAKEFOLDER"}},
+        })
+        # Will error with AuthenticationError (no token in test env), not a grammar error
+        if "error" in resp:
+            assert "grammar" not in resp["error"]["message"].lower(), \
+                f"Got unexpected grammar error: {resp['error']['message']}"
+    finally:
+        process.terminate()
+        process.wait(timeout=5)
+
+
+def test_sheets_get_folder_id_with_non_drive_target_returns_grammar_error():
+    """sheets_get with folder_id + non-empty target must return a grammar error (-32602)."""
+    process = _start_server()
+    try:
+        resp = send_request(process, {
+            "jsonrpc": "2.0", "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "sheets_get",
+                "arguments": {"target": "SOMESID:Sheet1", "folder_id": "FOLDER123"},
+            },
+        })
+        assert "error" in resp, f"Expected error, got: {resp}"
+        assert resp["error"]["code"] == -32602
+        assert "folder_id" in resp["error"]["message"]
+    finally:
+        process.terminate()
+        process.wait(timeout=5)
+
+
 if __name__ == "__main__":
     try:
         test_mcp_server()

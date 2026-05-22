@@ -94,6 +94,7 @@ class MCPSheetsServer:
 
 TARGET SHAPES:
 - '' (empty)              → Drive listing (list of spreadsheets the user can see)
+- '' + folder_id          → spreadsheets directly inside a specific Drive folder
 - 'SID'                   → whole spreadsheet metadata (meta_read)
 - 'SID:Sheet1'            → all values in Sheet1
 - 'SID:Sheet1!A1:B10'     → values in range
@@ -132,6 +133,10 @@ BEST PRACTICES:
                             "enum": ["json", "text"],
                             "default": "json",
                             "description": "Output format. DRIVE/SPREADSHEET always return JSON.",
+                        },
+                        "folder_id": {
+                            "type": "string",
+                            "description": "Drive folder ID. Only valid when target is empty (Drive-level listing). Filters to spreadsheets directly inside this folder.",
                         },
                     },
                     "required": [],
@@ -338,7 +343,10 @@ Reference: https://developers.google.com/sheets/api/reference/rest/v4/spreadshee
 
         if name == "sheets_get":
             target = _parse_first(args.get("target", ""))
-            response = verbs.do_get(self.client, target)
+            folder_id = args.get("folder_id")
+            if folder_id is not None and classify(target) != TargetType.DRIVE:
+                raise GrammarError("folder_id only applies to Drive-level listing (omit target or pass empty string)")
+            response = verbs.do_get(self.client, target, folder_id=folder_id)
             if args.get("format") == "text":
                 return _format_as_text(target, response)
             return response
