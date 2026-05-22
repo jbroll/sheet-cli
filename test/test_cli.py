@@ -82,6 +82,16 @@ class TestCliGet:
         stdout, _, _ = run_cli(["get", "SID:Sheet1!A1", "--format=json"], fake_client)
         assert '"values"' in stdout
 
+    def test_get_folder_flag_forwarded_to_list_spreadsheets(self, fake_client):
+        fake_client.list_spreadsheets.return_value = []
+        run_cli(["get", "--folder", "FOLDER123"], fake_client)
+        fake_client.list_spreadsheets.assert_called_once_with(folder_id="FOLDER123")
+
+    def test_get_folder_with_non_drive_target_exits_error(self, fake_client):
+        _, stderr, code = run_cli(["get", "SOMESID:Sheet1", "--folder", "FOLDER123"], fake_client)
+        assert code == 2
+        assert "folder" in stderr.lower()
+
 
 # ================================ put =====================================
 

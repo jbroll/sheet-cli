@@ -131,7 +131,11 @@ def _read_data_from_stdin() -> Optional[Any]:
 def cmd_get(args):
     client = SheetsClient()
     target = _parse_target(args.target or "")
-    response = verbs.do_get(client, target)
+    folder_id = getattr(args, 'folder', None)
+    if folder_id is not None and classify(target) != TargetType.DRIVE:
+        print("grammar error: --folder only applies to Drive-level listing (omit target)", file=sys.stderr)
+        sys.exit(2)
+    response = verbs.do_get(client, target, folder_id=folder_id)
     _emit_get(target, response, args.format == "json")
 
 
@@ -250,6 +254,8 @@ def main():
     p_get = sub.add_parser("get", help="read cells / metadata / drive listing")
     p_get.add_argument("target", nargs="?", default="",
                        help="target string; omit for Drive-level listing")
+    p_get.add_argument("--folder", default=None, metavar="FOLDER_ID",
+                       help="filter Drive listing to spreadsheets inside this folder (Drive-level only)")
     add_format(p_get)
     p_get.set_defaults(func=cmd_get)
 
