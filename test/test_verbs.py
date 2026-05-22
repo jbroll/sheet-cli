@@ -39,6 +39,17 @@ class TestDoGet:
         client.list_spreadsheets.assert_called_once()
         assert result == [{"id": "a"}]
 
+    def test_drive_with_folder_id_passes_folder_id_to_list_spreadsheets(self, client):
+        client.list_spreadsheets.return_value = [{"id": "x"}]
+        result = do_get(client, Target(None, None, None), folder_id="FOLDER123")
+        client.list_spreadsheets.assert_called_once_with(folder_id="FOLDER123")
+        assert result == [{"id": "x"}]
+
+    def test_drive_without_folder_id_passes_none(self, client):
+        client.list_spreadsheets.return_value = []
+        do_get(client, Target(None, None, None))
+        client.list_spreadsheets.assert_called_once_with(folder_id=None)
+
     def test_spreadsheet_calls_meta_read(self, client):
         do_get(client, Target("SID", None, None))
         client.meta_read.assert_called_once_with("SID")

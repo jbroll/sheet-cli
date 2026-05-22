@@ -64,7 +64,8 @@ def _locator_to_dimension_range(target: Target, sheet_id: int) -> Dict[str, Any]
 # ------------------------------ get --------------------------------
 
 
-def do_get(client: SheetsClient, target: Target) -> Any:
+def do_get(client: SheetsClient, target: Target,
+           folder_id: Optional[str] = None) -> Any:
     """Read what's at the target. Returns the raw API response.
 
     - DRIVE        → list of spreadsheet file metadata
@@ -79,7 +80,7 @@ def do_get(client: SheetsClient, target: Target) -> Any:
     tt = classify(target)
 
     if tt == TargetType.DRIVE:
-        return client.list_spreadsheets()
+        return client.list_spreadsheets(folder_id=folder_id)
 
     assert target.spreadsheet_id is not None
 
