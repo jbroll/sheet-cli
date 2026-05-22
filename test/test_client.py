@@ -223,5 +223,33 @@ class TestExceptions:
         assert error.status_code == 429
 
 
+class TestListSpreadsheets:
+    def _make_client_with_drive(self, response):
+        from unittest.mock import MagicMock
+        from sheet_client.client import SheetsClient
+
+        mock_drive = MagicMock()
+        mock_drive.files.return_value.list.return_value.execute.return_value = response
+
+        client = SheetsClient.__new__(SheetsClient)
+        client.drive = mock_drive
+        client._execute_with_retry = MagicMock(return_value=response)
+        return client, mock_drive
+
+    def test_no_folder_id_query_has_no_parent_filter(self):
+        client, mock_drive = self._make_client_with_drive({"files": []})
+        client.list_spreadsheets()
+        call_kwargs = mock_drive.files.return_value.list.call_args[1]
+        assert "in parents" not in call_kwargs['q']
+
+    def test_folder_id_prepends_parent_clause(self):
+        files = [{"id": "abc", "name": "Sheet"}]
+        client, mock_drive = self._make_client_with_drive({"files": files})
+        result = client.list_spreadsheets(folder_id="FOLDER123")
+        call_kwargs = mock_drive.files.return_value.list.call_args[1]
+        assert "'FOLDER123' in parents" in call_kwargs['q']
+        assert result == files
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

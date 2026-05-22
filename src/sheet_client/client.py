@@ -463,10 +463,13 @@ class SheetsClient:
         )
         return self._execute_with_retry(request)
 
-    def list_spreadsheets(self, include_shared_drives: bool = False) -> List[dict]:
+    def list_spreadsheets(self, folder_id: Optional[str] = None,
+                          include_shared_drives: bool = False) -> List[dict]:
         """List spreadsheets visible to the authenticated user.
 
         Args:
+            folder_id: Drive folder ID. When set, returns only spreadsheets
+                       directly inside that folder.
             include_shared_drives: If True, also search Shared Drives
                                    (organizational/team drives). Defaults to False,
                                    which returns files from My Drive and Shared With Me.
@@ -487,6 +490,8 @@ class SheetsClient:
         files = []
         page_token = None
         query = "mimeType='application/vnd.google-apps.spreadsheet' and trashed=false"
+        if folder_id:
+            query = f"'{folder_id}' in parents and {query}"
 
         while True:
             kwargs = {
