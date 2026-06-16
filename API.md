@@ -62,9 +62,14 @@ client = SheetsClient(
 | `clear(spreadsheet_id, ranges)` | Clear cell values (preserves formatting/notes) |
 | `meta_read(spreadsheet_id)` | Read metadata/structure |
 | `meta_write(spreadsheet_id, requests)` | Write metadata/structure (batchUpdate) |
-| `create(title, sheets)` | Create a new spreadsheet |
+| `create(title, sheets, parent_folder_id)` | Create a new spreadsheet (optionally placed in a Drive folder) |
 | `copy_sheet_to(source_id, source_sheet_id, dest_id)` | Server-side sheet copy across spreadsheets |
 | `copy_spreadsheet(source_id, new_title, parent_folder_id)` | Duplicate a whole spreadsheet via Drive `files.copy` |
+| `copy_file(source_id, new_title, parent_folder_id)` | Copy any Drive file via `files.copy` (generic) |
+| `copy_folder(source_id, new_title, parent_folder_id)` | Recursively copy a Drive folder and its contents |
+| `create_folder(name, parent_folder_id)` | Create an empty Drive folder |
+| `get_file_mime(file_id)` | Drive `mimeType` of a file/folder |
+| `list_files(folder_id, include_shared_drives)` | List Drive files of any type |
 | `delete_spreadsheet(spreadsheet_id)` | Delete a spreadsheet via Drive API |
 | `get_parents(spreadsheet_id)` | List Drive folder IDs containing the spreadsheet |
 | `update_parents(spreadsheet_id, add, remove)` | Add/remove Drive folder parents (files.update) |
@@ -989,6 +994,63 @@ print(new['spreadsheetUrl'])
 ```
 
 Used by `sheet-cli copy SID "Title"` and `sheet-cli copy SID ""`.
+
+---
+
+## copy_file()
+
+Copy any Drive file via `files.copy` (server-side). Generic counterpart to
+`copy_spreadsheet()`; works for any non-folder file type. Folders cannot be
+copied this way — use `copy_folder()`.
+
+```python
+def copy_file(source_id, new_title=None, parent_folder_id=None) -> dict
+```
+
+**Returns:** `{'id', 'name', 'mimeType', 'parents', 'url'}`.
+
+---
+
+## copy_folder()
+
+Recursively copy a Drive folder and its contents. Composes the recursion Drive
+lacks: create a new folder, copy each child into it, recurse into subfolders.
+Copying a folder into itself raises `ValueError`.
+
+```python
+def copy_folder(source_folder_id, new_title=None, parent_folder_id=None) -> dict
+```
+
+**Returns:** `{'id', 'name', 'parents', 'copied_files', 'copied_folders'}` —
+counts are totals across the whole recursive tree.
+
+---
+
+## create_folder()
+
+Create an empty Drive folder.
+
+```python
+def create_folder(name, parent_folder_id=None) -> dict
+```
+
+**Returns:** `{'id', 'name', 'parents', 'url'}`.
+
+---
+
+## list_files()
+
+List Drive files of any type (all pages merged). With `folder_id`, returns that
+folder's direct children; otherwise lists from the Drive root.
+
+```python
+def list_files(folder_id=None, include_shared_drives=False) -> List[dict]
+```
+
+**Returns:** list of `{'id', 'name', 'mimeType'}`.
+
+These (plus `get_file_mime`, `get_parents`, `update_parents`) back the
+`drive-cli` executable and the MCP `drive_*` tools.
 
 ---
 

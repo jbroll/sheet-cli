@@ -24,6 +24,7 @@ setup(
     entry_points={
         'console_scripts': [
             'sheet-cli=sheet_cli.cli:main',
+            'drive-cli=drive_cli.cli:main',
         ],
     },
     classifiers=[

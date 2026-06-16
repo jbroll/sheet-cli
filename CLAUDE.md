@@ -44,13 +44,16 @@ sheet-cli/
 │   │   ├── auth.py       # OAuth flow
 │   │   ├── utils.py      # A1/grid utilities
 │   │   └── exceptions.py # Custom exceptions
-│   └── sheet_cli/        # Unified six-verb CLI
+│   ├── sheet_cli/        # Unified six-verb CLI
+│   │   ├── cli.py        # argparse entry point
+│   │   ├── grammar.py    # target-string grammar (parse/resolve/classify)
+│   │   ├── verbs.py      # get / put / del / new
+│   │   ├── dispatch.py   # copy / move with server-side optimizations
+│   │   ├── properties.py # property handlers (.format, .freeze, .named, …)
+│   │   └── formats.py    # stdin/stdout formatters
+│   └── drive_cli/        # Drive-native CLI (IDs, not the target grammar)
 │       ├── cli.py        # argparse entry point
-│       ├── grammar.py    # target-string grammar (parse/resolve/classify)
-│       ├── verbs.py      # get / put / del / new
-│       ├── dispatch.py   # copy / move with server-side optimizations
-│       ├── properties.py # property handlers (.format, .freeze, .named, …)
-│       └── formats.py    # stdin/stdout formatters
+│       └── ops.py        # shared verb core (also used by the MCP server)
 │
 ├── mcp-server/           # MCP server exposing client to Claude Desktop
 ├── example/              # Usage examples
@@ -106,6 +109,27 @@ Drive folder(s) contain a spreadsheet (`get/put/new/del SID.parents[.FID]`).
 Whole-spreadsheet copy (`copy SID "Title"` or `copy SID ""`) routes
 through Drive `files.copy` — the destination SID slot is interpreted as
 the new file's title, or DRIVE for a default `"Copy of …"` name.
+
+## drive-cli — Drive-native sibling CLI
+
+Drive operations addressed by **file/folder ID** (not the `SID:Sheet!locator`
+grammar) live in a separate executable, `drive-cli`, so sheet-cli's grammar
+stays clean. It shares the `sheet_client` library and the OAuth token. The
+destination folder is an optional positional argument.
+
+```
+drive-cli list    [FOLDER]                  list files (root, or inside FOLDER)
+drive-cli copy    ID [FOLDER] [--name NAME] copy file/folder (folders recurse)
+drive-cli new     folder NAME [FOLDER]      create a folder
+drive-cli new     sheet  NAME [FOLDER]      create a spreadsheet
+drive-cli move    ID FOLDER [--add]         move into FOLDER (--add = multi-parent)
+drive-cli parents ID                        list folders containing ID
+```
+
+`copy` auto-detects by mimeType: folder → recursive, spreadsheet → `files.copy`,
+other → generic `files.copy`. `drive_cli/ops.py` is the shared verb core, reused
+by the MCP server's `drive_*` tools. Use `sheet-cli` for cells/sheets/structure,
+`drive-cli` for files/folders.
 
 ## How You Use This
 

@@ -1,0 +1,110 @@
+"""Tests for drive_cli.cli — argparse routing and delegation to ops.
+
+Patch argv / stdout / drive_cli.cli.SheetsClient, invoke main().
+"""
+
+import io
+import os
+import sys
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+
+from drive_cli import cli
+
+
+@pytest.fixture
+def fake_client():
+    c = MagicMock()
+    c.get_file_mime.return_value = "application/pdf"
+    c.copy_file.return_value = {"id": "NEW", "url": "u"}
+    c.copy_folder.return_value = {"id": "NEW", "copied_files": 0}
+    c.copy_spreadsheet.return_value = {"spreadsheetId": "NEW"}
+    c.create_folder.return_value = {"id": "F", "url": "u"}
+    c.create.return_value = {"spreadsheetId": "S"}
+    c.update_parents.return_value = {"id": "ID"}
+    c.get_parents.return_value = ["P1"]
+    c.list_files.return_value = [{"id": "a", "name": "x", "mimeType": "application/pdf"}]
+    return c
+
+
+def run_cli(argv, fake_client):
+    out, err = io.StringIO(), io.StringIO()
+    code = None
+    with patch.object(sys, "argv", ["drive-cli"] + argv), \
+         patch.object(sys, "stdout", out), \
+         patch.object(sys, "stderr", err), \
+         patch("drive_cli.cli.SheetsClient", return_value=fake_client):
+        try:
+            cli.main()
+        except SystemExit as e:
+            code = e.code
+    return out.getvalue(), err.getvalue(), code
+
+
+class TestCopy:
+    def test_copy_file_into_folder_with_name(self, fake_client):
+        _, _, code = run_cli(["copy", "FILE1", "FOLDER9", "--name", "New"], fake_client)
+        assert code in (None, 0)
+        fake_client.copy_file.assert_called_once_with(
+            "FILE1", new_title="New", parent_folder_id="FOLDER9")
+
+    def test_copy_file_no_folder(self, fake_client):
+        run_cli(["copy", "FILE1"], fake_client)
+        fake_client.copy_file.assert_called_once_with(
+            "FILE1", new_title=None, parent_folder_id=None)
+
+    def test_copy_folder_recurses(self, fake_client):
+        fake_client.get_file_mime.return_value = "application/vnd.google-apps.folder"
+        run_cli(["copy", "FOLDER1", "DEST"], fake_client)
+        fake_client.copy_folder.assert_called_once_with(
+            "FOLDER1", new_title=None, parent_folder_id="DEST")
+
+
+class TestNew:
+    def test_new_folder_with_parent(self, fake_client):
+        run_cli(["new", "folder", "Docs", "PARENT"], fake_client)
+        fake_client.create_folder.assert_called_once_with("Docs", parent_folder_id="PARENT")
+
+    def test_new_sheet_no_parent(self, fake_client):
+        run_cli(["new", "sheet", "Budget"], fake_client)
+        fake_client.create.assert_called_once_with("Budget", parent_folder_id=None)
+
+
+class TestMove:
+    def test_move_relocate(self, fake_client):
+        run_cli(["move", "ID", "DEST"], fake_client)
+        fake_client.update_parents.assert_called_once_with(
+            "ID", add=["DEST"], remove=["P1"])
+
+    def test_move_add(self, fake_client):
+        run_cli(["move", "ID", "DEST", "--add"], fake_client)
+        fake_client.update_parents.assert_called_once_with("ID", add=["DEST"])
+
+
+class TestListParents:
+    def test_list_root(self, fake_client):
+        stdout, _, code = run_cli(["list"], fake_client)
+        fake_client.list_files.assert_called_once_with(folder_id=None)
+        assert "a" in stdout
+
+    def test_list_folder(self, fake_client):
+        run_cli(["list", "FOLDER1"], fake_client)
+        fake_client.list_files.assert_called_once_with(folder_id="FOLDER1")
+
+    def test_parents(self, fake_client):
+        stdout, _, _ = run_cli(["parents", "ID"], fake_client)
+        fake_client.get_parents.assert_called_once_with("ID")
+        assert "P1" in stdout
+
+
+class TestErrors:
+    def test_unknown_verb_errors(self, fake_client):
+        _, _, code = run_cli(["frobnicate", "x"], fake_client)
+        assert code == 2
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

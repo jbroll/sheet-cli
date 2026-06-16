@@ -251,5 +251,163 @@ class TestListSpreadsheets:
         assert result == files
 
 
+FOLDER_MIME = 'application/vnd.google-apps.folder'
+
+
+class TestDriveCopyPrimitives:
+    def _make_client(self):
+        from unittest.mock import MagicMock
+        from sheet_client.client import SheetsClient
+
+        mock_drive = MagicMock()
+        client = SheetsClient.__new__(SheetsClient)
+        client.drive = mock_drive
+        client._execute_with_retry = MagicMock()
+        return client, mock_drive
+
+    # ------------------------------ get_file_mime ----------------------------
+
+    def test_get_file_mime_returns_mimetype(self):
+        client, mock_drive = self._make_client()
+        client._execute_with_retry.return_value = {"mimeType": FOLDER_MIME}
+        assert client.get_file_mime("FILE1") == FOLDER_MIME
+        call_kwargs = mock_drive.files.return_value.get.call_args[1]
+        assert call_kwargs["fileId"] == "FILE1"
+        assert "mimeType" in call_kwargs["fields"]
+
+    # ------------------------------- copy_file -------------------------------
+
+    def test_copy_file_passes_title_and_parent(self):
+        client, mock_drive = self._make_client()
+        client._execute_with_retry.return_value = {
+            "id": "NEW", "name": "Doc copy",
+            "mimeType": "application/pdf", "parents": ["FOLDER"],
+        }
+        result = client.copy_file("SRC", new_title="Doc copy",
+                                  parent_folder_id="FOLDER")
+        body = mock_drive.files.return_value.copy.call_args[1]["body"]
+        assert body["name"] == "Doc copy"
+        assert body["parents"] == ["FOLDER"]
+        assert result["id"] == "NEW"
+        assert result["mimeType"] == "application/pdf"
+        assert result["parents"] == ["FOLDER"]
+        assert "drive.google.com" in result["url"]
+
+    def test_copy_file_omits_empty_body_fields(self):
+        client, mock_drive = self._make_client()
+        client._execute_with_retry.return_value = {
+            "id": "NEW", "name": "Copy of X",
+            "mimeType": "application/pdf", "parents": [],
+        }
+        client.copy_file("SRC")
+        body = mock_drive.files.return_value.copy.call_args[1]["body"]
+        assert "name" not in body
+        assert "parents" not in body
+
+    # ------------------------------ copy_folder ------------------------------
+
+    def test_copy_folder_rejects_copy_into_self(self):
+        client, _ = self._make_client()
+        with pytest.raises(ValueError, match="itself"):
+            client.copy_folder("F1", parent_folder_id="F1")
+
+    def test_copy_folder_recurses_and_counts(self):
+        from unittest.mock import MagicMock
+        client, _ = self._make_client()
+
+        # Stub the drive-boundary helpers; exercise the recursion/counting logic.
+        client.create_folder = MagicMock(side_effect=[
+            {"id": "DST", "name": "Root", "parents": ["P"]},   # top-level copy
+            {"id": "DSTSUB", "name": "Sub", "parents": ["DST"]},  # nested copy
+        ])
+        # Root has: fileA, subfolder(Sub); Sub has: fileB
+        client._list_children = MagicMock(side_effect=[
+            [{"id": "fa", "name": "A", "mimeType": "text/plain"},
+             {"id": "sub", "name": "Sub", "mimeType": FOLDER_MIME}],
+            [{"id": "fb", "name": "B", "mimeType": "text/plain"}],
+        ])
+        client.copy_file = MagicMock(return_value={"id": "x"})
+
+        result = client.copy_folder("ROOT", new_title="Root",
+                                    parent_folder_id="P")
+
+        assert result["id"] == "DST"
+        assert result["copied_files"] == 2     # A + B
+        assert result["copied_folders"] == 1   # Sub
+        # Nested folder created under the new top-level folder.
+        assert client.create_folder.call_args_list[1].args[1] == "DST"
+        # fileB copied into the nested destination folder.
+        assert client.copy_file.call_args_list[-1].kwargs["parent_folder_id"] == "DSTSUB"
+
+    # ----------------------------- create_folder -----------------------------
+
+    def test_create_folder_builds_body_and_url(self):
+        client, mock_drive = self._make_client()
+        client._execute_with_retry.return_value = {
+            "id": "NEWF", "name": "Docs", "parents": ["PARENT"]}
+        result = client.create_folder("Docs", parent_folder_id="PARENT")
+        body = mock_drive.files.return_value.create.call_args[1]["body"]
+        assert body["name"] == "Docs"
+        assert body["mimeType"] == FOLDER_MIME
+        assert body["parents"] == ["PARENT"]
+        assert result["id"] == "NEWF"
+        assert "drive.google.com/drive/folders/NEWF" in result["url"]
+
+    def test_create_folder_omits_parents_when_root(self):
+        client, mock_drive = self._make_client()
+        client._execute_with_retry.return_value = {
+            "id": "NEWF", "name": "Docs", "parents": []}
+        client.create_folder("Docs")
+        body = mock_drive.files.return_value.create.call_args[1]["body"]
+        assert "parents" not in body
+
+    # ------------------------------- list_files ------------------------------
+
+    def test_list_files_root_has_no_parent_filter(self):
+        client, mock_drive = self._make_client()
+        client._execute_with_retry.return_value = {"files": [{"id": "a"}]}
+        result = client.list_files()
+        q = mock_drive.files.return_value.list.call_args[1]["q"]
+        assert "in parents" not in q
+        assert result == [{"id": "a"}]
+
+    def test_list_files_folder_filters_by_parent(self):
+        client, mock_drive = self._make_client()
+        client._execute_with_retry.return_value = {"files": []}
+        client.list_files(folder_id="FOLDER1")
+        q = mock_drive.files.return_value.list.call_args[1]["q"]
+        assert "'FOLDER1' in parents" in q
+
+    # ----------------------- create() folder placement -----------------------
+
+    def test_create_with_parent_moves_into_folder(self):
+        from unittest.mock import MagicMock
+        client, _ = self._make_client()
+        # spreadsheets.create returns the new SID; mock the Sheets path + helpers.
+        client.spreadsheets = MagicMock()
+        client._execute_with_retry.return_value = {
+            "spreadsheetId": "NEWSID",
+            "spreadsheetUrl": "https://docs.google.com/spreadsheets/d/NEWSID",
+        }
+        client.get_parents = MagicMock(return_value=["ROOT"])
+        client.update_parents = MagicMock(return_value={"id": "NEWSID"})
+        result = client.create("Budget", parent_folder_id="FOLDER9")
+        assert result["spreadsheetId"] == "NEWSID"
+        client.update_parents.assert_called_once_with(
+            "NEWSID", add=["FOLDER9"], remove=["ROOT"])
+
+    def test_create_without_parent_does_not_move(self):
+        from unittest.mock import MagicMock
+        client, _ = self._make_client()
+        client.spreadsheets = MagicMock()
+        client._execute_with_retry.return_value = {
+            "spreadsheetId": "NEWSID",
+            "spreadsheetUrl": "u",
+        }
+        client.update_parents = MagicMock()
+        client.create("Budget")
+        client.update_parents.assert_not_called()
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

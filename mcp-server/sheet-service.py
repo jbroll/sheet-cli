@@ -46,6 +46,7 @@ from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
+from drive_cli import ops as drive_ops
 from sheet_cli import dispatch, verbs
 from sheet_cli.grammar import (
     GrammarError,
@@ -331,6 +332,66 @@ Reference: https://developers.google.com/sheets/api/reference/rest/v4/spreadshee
                     "required": ["spreadsheet_id", "requests"],
                 },
             },
+            {
+                "name": "drive_list",
+                "description": """List Drive files of any type. With 'folder', lists that folder's direct children; otherwise lists files at the Drive root.""",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "folder": {"type": "string", "description": "Folder ID to list inside; omit for root."},
+                    },
+                },
+            },
+            {
+                "name": "drive_copy",
+                "description": """Copy any Drive file or folder. The source mimeType decides the path: a folder is copied recursively, a spreadsheet via files.copy (sheet-shaped result), any other file via the generic files.copy. 'folder' places the copy in that Drive folder; 'name' sets the new title.""",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string", "description": "Drive file/folder ID to copy."},
+                        "folder": {"type": "string", "description": "Destination folder ID; omit for My Drive root."},
+                        "name": {"type": "string", "description": "Name for the copy; omit for Drive's default 'Copy of ...'."},
+                    },
+                    "required": ["id"],
+                },
+            },
+            {
+                "name": "drive_new",
+                "description": """Create a Drive resource. kind='folder' creates an empty folder; kind='sheet' creates a spreadsheet. 'folder' places the new resource inside that folder.""",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "kind": {"type": "string", "enum": ["folder", "sheet"]},
+                        "name": {"type": "string", "description": "Name for the new resource."},
+                        "folder": {"type": "string", "description": "Parent folder ID; omit for My Drive root."},
+                    },
+                    "required": ["kind", "name"],
+                },
+            },
+            {
+                "name": "drive_move",
+                "description": """Move a Drive file/folder into 'folder'. By default relocates (replaces all current parents); with add=true, adds the folder while keeping existing parents (multi-parent).""",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string", "description": "Drive file/folder ID to move."},
+                        "folder": {"type": "string", "description": "Destination folder ID."},
+                        "add": {"type": "boolean", "description": "Keep existing parents instead of replacing them."},
+                    },
+                    "required": ["id", "folder"],
+                },
+            },
+            {
+                "name": "drive_parents",
+                "description": """List the Drive folder IDs that contain a file. Read-only; use drive_move to change membership.""",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string", "description": "Drive file/folder ID."},
+                    },
+                    "required": ["id"],
+                },
+            },
         ]
 
     # ------------------------------------------------------------------
@@ -379,6 +440,25 @@ Reference: https://developers.google.com/sheets/api/reference/rest/v4/spreadshee
 
         if name == "sheets_batch_update":
             return self.client.meta_write(args["spreadsheet_id"], args["requests"])
+
+        if name == "drive_list":
+            return drive_ops.do_list(self.client, folder=args.get("folder"))
+
+        if name == "drive_copy":
+            return drive_ops.do_copy(self.client, args["id"],
+                                     folder=args.get("folder"),
+                                     name=args.get("name"))
+
+        if name == "drive_new":
+            return drive_ops.do_new(self.client, args["kind"], args["name"],
+                                    folder=args.get("folder"))
+
+        if name == "drive_move":
+            return drive_ops.do_move(self.client, args["id"], args["folder"],
+                                     add=args.get("add", False))
+
+        if name == "drive_parents":
+            return drive_ops.do_parents(self.client, args["id"])
 
         raise ValueError(f"unknown tool: {name}")
 

@@ -514,11 +514,15 @@ class SheetsClient:
 
         return files
 
-    def create(self, title: str, sheets: Optional[List[dict]] = None) -> dict:
+    def create(self, title: str, sheets: Optional[List[dict]] = None,
+               parent_folder_id: Optional[str] = None) -> dict:
         """Create a new spreadsheet.
 
         Args:
             title: Title for the new spreadsheet
+            parent_folder_id: Drive folder to place the new spreadsheet in.
+                    The Sheets API creates in My Drive root, so when this is set
+                    the file is moved into the folder afterward (one extra call).
             sheets: Optional list of sheet properties dicts.
                     If not provided, creates a single default sheet named 'Sheet1'.
 
@@ -600,7 +604,14 @@ class SheetsClient:
             body['sheets'] = sheets
 
         request = self.spreadsheets.create(body=body)
-        return self._execute_with_retry(request)
+        response = self._execute_with_retry(request)
+
+        if parent_folder_id:
+            sid = response['spreadsheetId']
+            self.update_parents(sid, add=[parent_folder_id],
+                                remove=self.get_parents(sid))
+
+        return response
 
     def copy_sheet_to(self, source_spreadsheet_id: str, source_sheet_id: int,
                       destination_spreadsheet_id: str) -> dict:
@@ -678,6 +689,187 @@ class SheetsClient:
             'name': response.get('name'),
             'parents': response.get('parents', []),
         }
+
+    def get_file_mime(self, file_id: str) -> str:
+        """Return the Drive ``mimeType`` of a file or folder.
+
+        Used to branch a copy between folder (recursive) and file paths —
+        folders carry ``application/vnd.google-apps.folder``.
+        """
+        request = self.drive.files().get(fileId=file_id, fields='mimeType')
+        response = self._execute_with_retry(request)
+        return response.get('mimeType', '')
+
+    def copy_file(self, source_id: str,
+                  new_title: Optional[str] = None,
+                  parent_folder_id: Optional[str] = None) -> dict:
+        """Copy any Drive file via ``files.copy`` (server-side).
+
+        Generic counterpart to :meth:`copy_spreadsheet` — works for any
+        non-folder file type (PDF, Doc, image, …). Folders cannot be copied
+        this way; use :meth:`copy_folder`.
+
+        Args:
+            source_id: ID of the file to copy.
+            new_title: Name for the new file. When omitted, Drive defaults to
+                ``"Copy of <original name>"``.
+            parent_folder_id: Drive folder ID to place the copy in. When
+                omitted, the copy lands in the user's My Drive root.
+
+        Returns:
+            ``{'id', 'name', 'mimeType', 'parents', 'url'}``.
+        """
+        body: Dict[str, Any] = {}
+        if new_title:
+            body['name'] = new_title
+        if parent_folder_id:
+            body['parents'] = [parent_folder_id]
+
+        request = self.drive.files().copy(
+            fileId=source_id,
+            body=body,
+            fields='id,name,mimeType,parents',
+        )
+        response = self._execute_with_retry(request)
+        return {
+            'id': response['id'],
+            'name': response.get('name'),
+            'mimeType': response.get('mimeType'),
+            'parents': response.get('parents', []),
+            'url': f"https://drive.google.com/file/d/{response['id']}",
+        }
+
+    def copy_folder(self, source_folder_id: str,
+                    new_title: Optional[str] = None,
+                    parent_folder_id: Optional[str] = None) -> dict:
+        """Recursively copy a Drive folder and its contents.
+
+        Drive has no recursive-copy primitive, so this composes one: create a
+        new folder, then copy each child into it — recursing into subfolders.
+
+        Args:
+            source_folder_id: ID of the folder to copy.
+            new_title: Name for the new folder. When omitted, defaults to
+                ``"Copy of <original name>"``.
+            parent_folder_id: Drive folder ID to place the new folder in. When
+                omitted, it lands in the user's My Drive root.
+
+        Returns:
+            ``{'id', 'name', 'parents', 'copied_files', 'copied_folders'}`` —
+            the counts are totals across the whole recursive tree.
+        """
+        if parent_folder_id is not None and parent_folder_id == source_folder_id:
+            raise ValueError("cannot copy a folder into itself")
+
+        name = new_title or f"Copy of {self._file_name(source_folder_id)}"
+        new_folder = self.create_folder(name, parent_folder_id)
+        new_id = new_folder['id']
+
+        copied_files = 0
+        copied_folders = 0
+        for child in self._list_children(source_folder_id):
+            if child.get('mimeType') == 'application/vnd.google-apps.folder':
+                sub = self.copy_folder(child['id'], new_title=child['name'],
+                                       parent_folder_id=new_id)
+                copied_folders += 1 + sub['copied_folders']
+                copied_files += sub['copied_files']
+            else:
+                self.copy_file(child['id'], new_title=child['name'],
+                               parent_folder_id=new_id)
+                copied_files += 1
+
+        return {
+            'id': new_id,
+            'name': new_folder.get('name', name),
+            'parents': new_folder.get('parents', []),
+            'copied_files': copied_files,
+            'copied_folders': copied_folders,
+        }
+
+    def _file_name(self, file_id: str) -> str:
+        """Return the Drive ``name`` of a file or folder."""
+        request = self.drive.files().get(fileId=file_id, fields='name')
+        response = self._execute_with_retry(request)
+        return response.get('name', '')
+
+    def create_folder(self, name: str,
+                      parent_folder_id: Optional[str] = None) -> dict:
+        """Create an empty Drive folder.
+
+        Args:
+            name: Folder name.
+            parent_folder_id: Drive folder to create it inside. When omitted,
+                the folder lands in the user's My Drive root.
+
+        Returns:
+            ``{'id', 'name', 'parents', 'url'}``.
+        """
+        body: Dict[str, Any] = {
+            'name': name,
+            'mimeType': 'application/vnd.google-apps.folder',
+        }
+        if parent_folder_id:
+            body['parents'] = [parent_folder_id]
+        request = self.drive.files().create(body=body, fields='id,name,parents')
+        response = self._execute_with_retry(request)
+        return {
+            'id': response['id'],
+            'name': response.get('name'),
+            'parents': response.get('parents', []),
+            'url': f"https://drive.google.com/drive/folders/{response['id']}",
+        }
+
+    def list_files(self, folder_id: Optional[str] = None,
+                   include_shared_drives: bool = False) -> List[dict]:
+        """List Drive files of any type (all pages merged).
+
+        Args:
+            folder_id: When set, returns only files directly inside that folder.
+            include_shared_drives: If True, also search Shared Drives.
+
+        Returns:
+            List of ``{'id', 'name', 'mimeType'}`` dicts.
+        """
+        files: List[dict] = []
+        page_token: Optional[str] = None
+        query = "trashed=false"
+        if folder_id:
+            query = f"'{folder_id}' in parents and {query}"
+        while True:
+            kwargs: Dict[str, Any] = {
+                'q': query,
+                'fields': 'nextPageToken, files(id,name,mimeType)',
+                'pageSize': 1000,
+            }
+            if page_token:
+                kwargs['pageToken'] = page_token
+            if include_shared_drives:
+                kwargs['includeItemsFromAllDrives'] = True
+                kwargs['supportsAllDrives'] = True
+            request = self.drive.files().list(**kwargs)
+            response = self._execute_with_retry(request)
+            files.extend(response.get('files', []))
+            page_token = response.get('nextPageToken')
+            if not page_token:
+                break
+        return files
+
+    def _list_children(self, folder_id: str) -> List[dict]:
+        """Return non-trashed direct children of a folder (paginated)."""
+        children: List[dict] = []
+        page_token: Optional[str] = None
+        while True:
+            request = self.drive.files().list(
+                q=f"'{folder_id}' in parents and trashed=false",
+                fields='nextPageToken, files(id,name,mimeType)',
+                pageToken=page_token,
+            )
+            response = self._execute_with_retry(request)
+            children.extend(response.get('files', []))
+            page_token = response.get('nextPageToken')
+            if not page_token:
+                break
+        return children
 
     def get_parents(self, spreadsheet_id: str) -> List[str]:
         """Return Drive folder IDs that contain this spreadsheet.

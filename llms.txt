@@ -212,6 +212,24 @@ token cached at `~/.sheet-cli/token.json`. First run opens a browser;
 subsequent runs reuse and auto-refresh. Run `sheet-cli auth` to re-auth or
 switch accounts.
 
+## drive-cli — Drive files & folders
+
+Drive operations addressed by file/folder ID (not this target grammar) live in
+a sibling executable, `drive-cli`, sharing the same library + token. The
+destination folder is an optional positional argument.
+
+```
+drive-cli list    [FOLDER]                  list files (root, or inside FOLDER)
+drive-cli copy    ID [FOLDER] [--name NAME] copy file/folder; a folder recurses
+drive-cli new     folder NAME [FOLDER]      create a folder
+drive-cli new     sheet  NAME [FOLDER]      create a spreadsheet
+drive-cli move    ID FOLDER [--add]         move into FOLDER (--add = multi-parent)
+drive-cli parents ID                        list folders containing ID
+```
+
+`copy` auto-detects by mimeType: folder → recursive, spreadsheet → `files.copy`,
+other file → generic `files.copy`. Same ops exposed as MCP `drive_*` tools.
+
 ## See also
 
 - [mcp-server/README.md](mcp-server/README.md) — same grammar exposed as MCP tools for Claude Desktop

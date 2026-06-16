@@ -207,6 +207,42 @@ sheet-cli get SID:Sheet1.conditional
 - Mutations (`put`, `del`, `copy`, `move`) are silent by default; `--format=json` echoes the target and response.
 - `new` always emits JSON (the new SID / sheet properties are the point).
 
+## drive-cli — Drive files & folders
+
+A sibling executable, `drive-cli`, handles Drive-native operations addressed by
+plain **file/folder ID** (not the `SID:Sheet!locator` grammar). It shares the
+same library and cached OAuth token. The destination folder is an optional
+positional argument; mutations print JSON, `list`/`parents` are text-first.
+
+```
+drive-cli list    [FOLDER]                  list files (root, or inside FOLDER)
+drive-cli copy    ID [FOLDER] [--name NAME] copy file/folder, optionally into FOLDER
+drive-cli new     folder NAME [FOLDER]      create a folder, optionally inside FOLDER
+drive-cli new     sheet  NAME [FOLDER]      create a spreadsheet, optionally inside FOLDER
+drive-cli move    ID FOLDER [--add]         move into FOLDER (--add keeps existing parents)
+drive-cli parents ID                        list the folders containing ID
+drive-cli auth                              run OAuth flow
+```
+
+```bash
+# Copy any file type; a folder is copied recursively
+drive-cli copy FILE_ID DEST_FOLDER --name "Renamed copy"
+drive-cli copy FOLDER_ID DEST_FOLDER
+
+# Create
+drive-cli new folder "Q3 docs" PARENT_FOLDER
+drive-cli new sheet  "Budget" PARENT_FOLDER
+
+# Relocate / inspect
+drive-cli move FILE_ID DEST_FOLDER
+drive-cli parents FILE_ID
+drive-cli list PARENT_FOLDER
+```
+
+`copy` auto-detects the source type by mimeType: folder → recursive copy,
+spreadsheet → `files.copy`, any other file → generic `files.copy`. The same
+operations are exposed to Claude via the MCP `drive_*` tools.
+
 ## API Methods
 
 Complete API reference in API.md:
@@ -219,6 +255,11 @@ Complete API reference in API.md:
 - `create(title, sheets=None)` - Create a new spreadsheet
 - `copy_sheet_to(source_id, source_sheet_id, dest_id)` - Server-side sheet copy between spreadsheets
 - `copy_spreadsheet(source_id, new_title=None, parent_folder_id=None)` - Duplicate a whole spreadsheet via Drive `files.copy`
+- `copy_file(source_id, new_title=None, parent_folder_id=None)` - Copy any Drive file via `files.copy` (generic)
+- `copy_folder(source_id, new_title=None, parent_folder_id=None)` - Recursively copy a Drive folder and its contents
+- `create_folder(name, parent_folder_id=None)` - Create an empty Drive folder
+- `get_file_mime(file_id)` - Drive mimeType of a file/folder
+- `list_files(folder_id=None, include_shared_drives=False)` - List Drive files of any type
 - `delete_spreadsheet(spreadsheet_id)` - Delete a spreadsheet via Drive API
 - `get_parents(spreadsheet_id)` - List Drive folder parents of a spreadsheet
 - `update_parents(spreadsheet_id, add=None, remove=None)` - Add/remove Drive folder parents
@@ -311,14 +352,17 @@ sheet-cli/
 │   │   ├── utils.py          # A1 notation utilities
 │   │   ├── exceptions.py     # Custom exceptions
 │   │   └── __init__.py       # Package exports
-│   └── sheet_cli/            # CLI layer
-│       ├── cli.py            # Six-verb argparse entry point
-│       ├── grammar.py        # Target-string grammar (parse/resolve/classify)
-│       ├── properties.py     # Property handler registry (.format, .freeze, …)
-│       ├── verbs.py          # get / put / del / new dispatch
-│       ├── dispatch.py       # copy / move with server-side optimizations
-│       ├── formats.py        # stdin/stdout formatters
-│       └── __main__.py       # `python -m sheet_cli`
+│   ├── sheet_cli/            # CLI layer
+│   │   ├── cli.py            # Six-verb argparse entry point
+│   │   ├── grammar.py        # Target-string grammar (parse/resolve/classify)
+│   │   ├── properties.py     # Property handler registry (.format, .freeze, …)
+│   │   ├── verbs.py          # get / put / del / new dispatch
+│   │   ├── dispatch.py       # copy / move with server-side optimizations
+│   │   ├── formats.py        # stdin/stdout formatters
+│   │   └── __main__.py       # `python -m sheet_cli`
+│   └── drive_cli/            # Drive-native CLI (file/folder IDs)
+│       ├── cli.py            # list/copy/new/move/parents argparse entry point
+│       └── ops.py            # Shared verb core (also used by the MCP server)
 ├── mcp-server/               # MCP server exposing client to Claude Desktop
 ├── example/                  # Usage examples
 ├── test/                     # Unit, mock, and integration tests

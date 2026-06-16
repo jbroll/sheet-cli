@@ -23,6 +23,11 @@ EXPECTED_TOOLS = [
     "sheets_copy",
     "sheets_move",
     "sheets_batch_update",
+    "drive_list",
+    "drive_copy",
+    "drive_new",
+    "drive_move",
+    "drive_parents",
 ]
 
 
