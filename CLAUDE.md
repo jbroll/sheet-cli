@@ -45,6 +45,7 @@ sheet-cli/
 │   │   ├── utils.py      # A1/grid utilities
 │   │   └── exceptions.py # Custom exceptions
 │   ├── sheet_cli/        # Unified six-verb CLI
+│   │   ├── multicall.py  # multi-call launcher (dispatch on argv[0])
 │   │   ├── cli.py        # argparse entry point
 │   │   ├── grammar.py    # target-string grammar (parse/resolve/classify)
 │   │   ├── verbs.py      # get / put / del / new
@@ -110,12 +111,15 @@ Whole-spreadsheet copy (`copy SID "Title"` or `copy SID ""`) routes
 through Drive `files.copy` — the destination SID slot is interpreted as
 the new file's title, or DRIVE for a default `"Copy of …"` name.
 
-## drive-cli — Drive-native sibling CLI
+## drive-cli — Drive-native CLI (same binary, multi-call)
 
 Drive operations addressed by **file/folder ID** (not the `SID:Sheet!locator`
-grammar) live in a separate executable, `drive-cli`, so sheet-cli's grammar
-stays clean. It shares the `sheet_client` library and the OAuth token. The
-destination folder is an optional positional argument.
+grammar) run under the name `drive-cli`, so sheet-cli's grammar stays clean.
+It's the **same binary** as sheet-cli: `sheet_cli/multicall.py` dispatches on
+`basename(argv[0])` (a name starting with `drive` → Drive CLI, else Sheets
+CLI), and both console scripts point at it. It shares the `sheet_client`
+library and the OAuth token. The destination folder is an optional positional
+argument.
 
 ```
 drive-cli list    [FOLDER]                  list files (root, or inside FOLDER)

@@ -66,8 +66,11 @@ text-first reads.
     `sheet_cli` shares `verbs.py`/`dispatch.py`).
   - `cli.py` — argparse entry point that parses positional IDs/folders and
     delegates to `ops`.
-- `setup.py`: add console script `drive-cli=drive_cli.cli:main`.
-  `find_packages(where='src')` already discovers the new package.
+- Multi-call binary: a single launcher `sheet_cli/multicall.py` dispatches on
+  `basename(argv[0])` (name starting with `drive` → Drive CLI, else Sheets
+  CLI). Both `setup.py` console scripts (`sheet-cli`, `drive-cli`) point at
+  `sheet_cli.multicall:main` — one binary, two names, not a separate
+  executable. `find_packages(where='src')` discovers the `drive_cli` package.
 - Shares the `sheet_client` library and the cached OAuth token
   (`~/.sheet-cli/token.json`).
 

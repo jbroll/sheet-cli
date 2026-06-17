@@ -209,8 +209,9 @@ sheet-cli get SID:Sheet1.conditional
 
 ## drive-cli — Drive files & folders
 
-A sibling executable, `drive-cli`, handles Drive-native operations addressed by
-plain **file/folder ID** (not the `SID:Sheet!locator` grammar). It shares the
+`drive-cli` is the **same binary** invoked under a different name (a multi-call
+launcher dispatches on `argv[0]`). It handles Drive-native operations addressed
+by plain **file/folder ID** (not the `SID:Sheet!locator` grammar), sharing the
 same library and cached OAuth token. The destination folder is an optional
 positional argument; mutations print JSON, `list`/`parents` are text-first.
 
@@ -353,6 +354,7 @@ sheet-cli/
 │   │   ├── exceptions.py     # Custom exceptions
 │   │   └── __init__.py       # Package exports
 │   ├── sheet_cli/            # CLI layer
+│   │   ├── multicall.py      # Multi-call launcher (dispatch on argv[0])
 │   │   ├── cli.py            # Six-verb argparse entry point
 │   │   ├── grammar.py        # Target-string grammar (parse/resolve/classify)
 │   │   ├── properties.py     # Property handler registry (.format, .freeze, …)

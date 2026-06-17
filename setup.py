@@ -22,9 +22,11 @@ setup(
         'test': ['pytest>=7.0'],
     },
     entry_points={
+        # Multi-call binary: both names dispatch through one launcher that
+        # checks basename(argv[0]).
         'console_scripts': [
-            'sheet-cli=sheet_cli.cli:main',
-            'drive-cli=drive_cli.cli:main',
+            'sheet-cli=sheet_cli.multicall:main',
+            'drive-cli=sheet_cli.multicall:main',
         ],
     },
     classifiers=[
