@@ -1,5 +1,6 @@
 """Main Google Sheets API client."""
 
+import random
 import time
 from enum import IntFlag
 from typing import Any, Dict, List, Optional
@@ -9,6 +10,18 @@ from googleapiclient.errors import HttpError
 
 from .auth import get_credentials
 from .exceptions import SheetsAPIError, RateLimitError, ServerError
+
+
+# Drive reports throttling as 403 with one of these reasons, not only as 429.
+# Any other 403 (insufficientFilePermissions, say) is fatal and must not retry.
+RETRYABLE_403_REASONS = (
+    'rateLimitExceeded',
+    'userRateLimitExceeded',
+    'sharingRateLimitExceeded',
+    'quotaExceeded',
+)
+
+MAX_BACKOFF_SECONDS = 64
 
 
 class CellData(IntFlag):
@@ -22,6 +35,20 @@ class CellData(IntFlag):
     FORMULA = 2    # Formulas (=SUM(A:A))
     FORMAT = 4     # Formatting (colors, fonts, borders, number formats)
     NOTE = 8       # Cell notes/comments
+
+
+def _backoff(attempt: int) -> float:
+    """Exponential backoff with jitter, per Google's guidance."""
+    return min((2 ** attempt) + random.random(), MAX_BACKOFF_SECONDS)
+
+
+def _is_throttled(error: HttpError) -> bool:
+    """True when a 403 is Drive throttling rather than a permission refusal."""
+    content = getattr(error, 'content', b'') or b''
+    if isinstance(content, bytes):
+        content = content.decode('utf-8', 'replace')
+    text = f"{error} {getattr(error, 'error_details', '')} {content}"
+    return any(reason in text for reason in RETRYABLE_403_REASONS)
 
 
 class SheetsClient:
@@ -51,7 +78,7 @@ class SheetsClient:
         self.spreadsheets = self.service.spreadsheets()
         self.drive = build('drive', 'v3', credentials=creds)
 
-    def _execute_with_retry(self, request, max_retries: int = 3) -> Any:
+    def _execute_with_retry(self, request, max_retries: int = 5) -> Any:
         """Execute API request with exponential backoff for rate limits and server errors.
 
         Args:
@@ -72,11 +99,10 @@ class SheetsClient:
             except HttpError as e:
                 status_code = e.resp.status
 
-                # Rate limit (429) - retry with backoff
-                if status_code == 429:
+                # Rate limit (429, or 403 with a throttling reason) - back off
+                if status_code == 429 or (status_code == 403 and _is_throttled(e)):
                     if attempt < max_retries - 1:
-                        wait_time = (2 ** attempt)
-                        time.sleep(wait_time)
+                        time.sleep(_backoff(attempt))
                         continue
                     raise RateLimitError(
                         f"Rate limit exceeded after {max_retries} retries",
@@ -87,8 +113,7 @@ class SheetsClient:
                 # Server errors (500, 503) - retry with backoff
                 elif status_code in (500, 503):
                     if attempt < max_retries - 1:
-                        wait_time = (2 ** attempt)
-                        time.sleep(wait_time)
+                        time.sleep(_backoff(attempt))
                         continue
                     raise ServerError(
                         f"Server error {status_code} after {max_retries} retries",

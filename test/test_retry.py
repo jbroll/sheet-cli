@@ -12,12 +12,12 @@ from sheet_client import SheetsClient
 from sheet_client.exceptions import RateLimitError, ServerError, SheetsAPIError
 
 
-def _http_error(status):
+def _http_error(status, content=b'err'):
     """Construct a googleapiclient HttpError-like mock with a .resp.status."""
     from googleapiclient.errors import HttpError
     resp = MagicMock()
     resp.status = status
-    return HttpError(resp=resp, content=b'err')
+    return HttpError(resp=resp, content=content)
 
 
 @pytest.fixture
@@ -49,11 +49,11 @@ class TestRetry:
 
     def test_429_exhausts_retries(self, client):
         req = MagicMock()
-        req.execute.side_effect = [_http_error(429)] * 3
+        req.execute.side_effect = [_http_error(429)] * 5
         with pytest.raises(RateLimitError) as info:
             client._execute_with_retry(req)
         assert info.value.status_code == 429
-        assert req.execute.call_count == 3
+        assert req.execute.call_count == 5
 
     def test_500_retries_then_succeeds(self, client):
         req = MagicMock()
@@ -62,10 +62,33 @@ class TestRetry:
 
     def test_503_exhausts_retries(self, client):
         req = MagicMock()
-        req.execute.side_effect = [_http_error(503)] * 3
+        req.execute.side_effect = [_http_error(503)] * 5
         with pytest.raises(ServerError) as info:
             client._execute_with_retry(req)
         assert info.value.status_code == 503
+
+    def test_403_throttling_retries_then_succeeds(self, client):
+        req = MagicMock()
+        req.execute.side_effect = [_http_error(403, b'{"error": {"errors": '
+                                              b'[{"reason": "userRateLimitExceeded"}]}}'),
+                                   {'ok': True}]
+        assert client._execute_with_retry(req) == {'ok': True}
+        assert req.execute.call_count == 2
+
+    def test_403_permission_refusal_does_not_retry(self, client):
+        req = MagicMock()
+        req.execute.side_effect = _http_error(
+            403, b'{"error": {"errors": [{"reason": "insufficientFilePermissions"}]}}')
+        with pytest.raises(SheetsAPIError) as info:
+            client._execute_with_retry(req)
+        assert info.value.status_code == 403
+        assert req.execute.call_count == 1
+
+    def test_backoff_grows_and_is_jittered(self):
+        from sheet_client.client import _backoff, MAX_BACKOFF_SECONDS
+        assert 1 <= _backoff(0) < 2
+        assert 4 <= _backoff(2) < 5
+        assert _backoff(30) == MAX_BACKOFF_SECONDS
 
     def test_400_no_retry(self, client):
         req = MagicMock()
