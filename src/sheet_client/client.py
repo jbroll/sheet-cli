@@ -927,3 +927,176 @@ class SheetsClient:
             kwargs['removeParents'] = ','.join(remove)
         request = self.drive.files().update(body={}, **kwargs)
         return self._execute_with_retry(request)
+
+    # ----------------------------- ownership ------------------------------
+
+    FOLDER_MIME = 'application/vnd.google-apps.folder'
+    SHORTCUT_MIME = 'application/vnd.google-apps.shortcut'
+
+    _TREE_FIELDS = ('nextPageToken, files(id,name,mimeType,parents,trashed,'
+                    'driveId,owners(emailAddress),shortcutDetails(targetId),'
+                    'capabilities(canShare,canEdit))')
+
+    def whoami(self) -> dict:
+        """Return ``{'emailAddress', 'displayName'}`` for the authenticated user."""
+        request = self.drive.about().get(fields='user(emailAddress,displayName)')
+        response = self._execute_with_retry(request)
+        return response.get('user', {})
+
+    def walk_tree(self, root_id: str) -> List[dict]:
+        """Depth-first inventory of ``root_id`` and every descendant.
+
+        Only items visible to the authenticated user are returned — Drive's
+        ``files.list`` cannot see what it has no access to, so the result also
+        serves as the coverage report for a transfer.
+
+        Each node: ``{'id', 'name', 'mimeType', 'parents', 'owner', 'depth',
+        'is_folder', 'shortcut_target', 'shared_drive', 'can_share'}``.
+        """
+        root = self._execute_with_retry(self.drive.files().get(
+            fileId=root_id,
+            fields=('id,name,mimeType,parents,trashed,driveId,'
+                    'owners(emailAddress),shortcutDetails(targetId),'
+                    'capabilities(canShare,canEdit)'),
+        ))
+        nodes: List[dict] = []
+        seen: set = set()
+
+        def visit(raw: dict, depth: int) -> None:
+            if raw['id'] in seen:
+                return
+            seen.add(raw['id'])
+            owners = raw.get('owners') or [{}]
+            nodes.append({
+                'id': raw['id'],
+                'name': raw.get('name', ''),
+                'mimeType': raw.get('mimeType', ''),
+                'parents': raw.get('parents', []),
+                'owner': owners[0].get('emailAddress'),
+                'depth': depth,
+                'is_folder': raw.get('mimeType') == self.FOLDER_MIME,
+                'shortcut_target': (raw.get('shortcutDetails') or {}).get('targetId'),
+                'shared_drive': bool(raw.get('driveId')),
+                'can_share': (raw.get('capabilities') or {}).get('canShare'),
+            })
+            if raw.get('mimeType') != self.FOLDER_MIME:
+                return
+            for child in self._list_tree_children(raw['id']):
+                visit(child, depth + 1)
+
+        visit(root, 0)
+        return nodes
+
+    def _list_tree_children(self, folder_id: str) -> List[dict]:
+        """Direct children of a folder with the fields :meth:`walk_tree` needs."""
+        children: List[dict] = []
+        page_token: Optional[str] = None
+        while True:
+            request = self.drive.files().list(
+                q=f"'{folder_id}' in parents and trashed=false",
+                fields=self._TREE_FIELDS,
+                pageSize=1000,
+                pageToken=page_token,
+            )
+            response = self._execute_with_retry(request)
+            children.extend(response.get('files', []))
+            page_token = response.get('nextPageToken')
+            if not page_token:
+                break
+        return children
+
+    def list_permissions(self, file_id: str) -> List[dict]:
+        """List permissions on a file (id, type, role, email, pendingOwner)."""
+        permissions: List[dict] = []
+        page_token: Optional[str] = None
+        while True:
+            request = self.drive.permissions().list(
+                fileId=file_id,
+                fields=('nextPageToken, permissions(id,type,role,emailAddress,'
+                        'pendingOwner,deleted)'),
+                pageToken=page_token,
+            )
+            response = self._execute_with_retry(request)
+            permissions.extend(response.get('permissions', []))
+            page_token = response.get('nextPageToken')
+            if not page_token:
+                break
+        return permissions
+
+    def transfer_ownership(self, file_id: str, email: str) -> dict:
+        """Hand ownership of ``file_id`` to ``email`` in a single call.
+
+        Works only between Google Workspace accounts in the same organization.
+        Consumer accounts reject this with ``consentRequiredForOwnershipTransfer``
+        and need :meth:`offer_ownership` followed by :meth:`accept_ownership`.
+        """
+        request = self.drive.permissions().create(
+            fileId=file_id,
+            body={'type': 'user', 'role': 'owner', 'emailAddress': email},
+            transferOwnership=True,
+            fields='id,role,emailAddress',
+        )
+        return self._execute_with_retry(request)
+
+    def offer_ownership(self, file_id: str, email: str,
+                        notify: bool = True) -> dict:
+        """Mark ``email`` as the pending owner of ``file_id`` (consumer flow).
+
+        Ownership does not move until the recipient calls
+        :meth:`accept_ownership`. The flag lives on a direct permission, so it
+        cannot be inherited from a parent folder — every file needs its own call.
+        """
+        permission = self._permission_for(file_id, email)
+        if not permission:
+            permission = self._execute_with_retry(self.drive.permissions().create(
+                fileId=file_id,
+                body={'type': 'user', 'role': 'writer', 'emailAddress': email},
+                sendNotificationEmail=notify,
+                fields='id,role,pendingOwner,emailAddress',
+            ))
+
+        # permissions.create accepts pendingOwner and silently drops it — the
+        # flag only takes on update, so always set it in a second call.
+        return self._execute_with_retry(self.drive.permissions().update(
+            fileId=file_id,
+            permissionId=permission['id'],
+            body={'role': 'writer', 'pendingOwner': True},
+            fields='id,role,pendingOwner,emailAddress',
+        ))
+
+    def accept_ownership(self, file_id: str, email: str) -> dict:
+        """Accept a pending ownership transfer as ``email`` (the new owner)."""
+        existing = self._permission_for(file_id, email)
+        if existing:
+            request = self.drive.permissions().update(
+                fileId=file_id,
+                permissionId=existing['id'],
+                body={'role': 'owner'},
+                transferOwnership=True,
+                fields='id,role,emailAddress',
+            )
+        else:
+            request = self.drive.permissions().create(
+                fileId=file_id,
+                body={'type': 'user', 'role': 'owner', 'emailAddress': email},
+                transferOwnership=True,
+                fields='id,role,emailAddress',
+            )
+        return self._execute_with_retry(request)
+
+    def _permission_for(self, file_id: str, email: str) -> Optional[dict]:
+        """The existing permission granting ``email`` access, if any.
+
+        Returns None when permissions cannot be listed — a writer on a file with
+        ``writersCanShare`` off gets 403 here, and the caller's create path is
+        the correct fallback.
+        """
+        try:
+            permissions = self.list_permissions(file_id)
+        except SheetsAPIError:
+            return None
+        target = email.lower()
+        for perm in permissions:
+            if (perm.get('emailAddress') or '').lower() == target:
+                return perm
+        return None

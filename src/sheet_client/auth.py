@@ -1,6 +1,7 @@
 """OAuth 2.0 authentication for Google Sheets API."""
 
 import os
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -23,11 +24,29 @@ SCOPES = [
 DEFAULT_CREDS_DIR = Path.home() / '.sheet-cli'
 
 
+def token_path_for(account: Optional[str]) -> Optional[str]:
+    """Token cache path for one account, or None for the default token.
+
+    An ownership transfer authenticates as several accounts in turn, so each
+    needs its own cache instead of overwriting the shared one.
+    """
+    if not account:
+        return None
+    safe = re.sub(r'[^A-Za-z0-9._@-]', '_', account)
+    return str(DEFAULT_CREDS_DIR / f'token-{safe}.json')
+
+
 def _has_required_scopes(creds: Credentials) -> bool:
     scopes = getattr(creds, 'scopes', None)
     if not scopes:
         return False
     return set(SCOPES).issubset(set(scopes))
+
+
+def cached_accounts() -> set:
+    """Addresses that already have a per-account token cached."""
+    return {path.name[len('token-'):-len('.json')]
+            for path in DEFAULT_CREDS_DIR.glob('token-*.json')}
 
 
 def get_credentials(credentials_path: Optional[str] = None,

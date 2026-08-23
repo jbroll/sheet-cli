@@ -1095,6 +1095,80 @@ client.update_parents(sid, add=["NEW_FOLDER_ID"], remove=existing)
 
 ---
 
+## whoami()
+
+Return `{'emailAddress', 'displayName'}` for the authenticated user.
+
+```python
+def whoami() -> dict
+```
+
+---
+
+## walk_tree()
+
+Depth-first inventory of a folder and every descendant.
+
+```python
+def walk_tree(root_id: str) -> List[dict]
+```
+
+Each node carries `id`, `name`, `mimeType`, `parents`, `owner`, `depth`,
+`is_folder`, `shortcut_target`, `shared_drive`, and `can_share`. Only items
+visible to the authenticated user are returned, so the result doubles as the
+coverage report for an ownership transfer.
+
+---
+
+## list_permissions()
+
+List a file's permissions (`id`, `type`, `role`, `emailAddress`, `pendingOwner`).
+
+```python
+def list_permissions(file_id: str) -> List[dict]
+```
+
+---
+
+## transfer_ownership()
+
+Hand ownership to another account in one call.
+
+```python
+def transfer_ownership(file_id: str, email: str) -> dict
+```
+
+Works only between Google Workspace accounts in the same organization. Consumer
+accounts raise `consentRequiredForOwnershipTransfer`; use `offer_ownership()`
+then `accept_ownership()` instead. The previous owner is downgraded to writer.
+
+---
+
+## offer_ownership()
+
+Mark an account as the pending owner (the consumer flow's first step).
+
+```python
+def offer_ownership(file_id: str, email: str, notify: bool = True) -> dict
+```
+
+Updates the recipient's existing permission when there is one, otherwise creates
+it and then flags it — `permissions.create` accepts `pendingOwner` in the body
+and silently drops it, so the flag always takes a second `permissions.update`.
+Ownership does not move until the recipient calls `accept_ownership()`.
+
+---
+
+## accept_ownership()
+
+Accept a pending transfer. Must run authenticated as the new owner.
+
+```python
+def accept_ownership(file_id: str, email: str) -> dict
+```
+
+---
+
 ## See Also
 
 - [Google Sheets API v4 Documentation](https://developers.google.com/sheets/api)

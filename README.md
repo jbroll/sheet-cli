@@ -222,8 +222,17 @@ drive-cli new     folder NAME [FOLDER]      create a folder, optionally inside F
 drive-cli new     sheet  NAME [FOLDER]      create a spreadsheet, optionally inside FOLDER
 drive-cli move    ID FOLDER [--add]         move into FOLDER (--add keeps existing parents)
 drive-cli parents ID                        list the folders containing ID
+drive-cli inventory ROOT [-o MANIFEST]      walk a tree, recording each node's owner
+drive-cli plan   ROOT --to EMAIL           report which owners must act, without changing anything
+drive-cli chown  MANIFEST --to EMAIL        transfer one owner's files to a new owner
+drive-cli accept MANIFEST                   accept every pending transfer, as the new owner
 drive-cli auth                              run OAuth flow
 ```
+
+Every command takes `--as EMAIL`, which selects the cached token at
+`~/.sheet-cli/token-EMAIL.json` instead of the shared default. A transfer runs
+as each source owner in turn and then as the new owner, so each needs its own
+token: run `drive-cli auth --as EMAIL` once per account.
 
 ```bash
 # Copy any file type; a folder is copied recursively
@@ -243,6 +252,134 @@ drive-cli list PARENT_FOLDER
 `copy` auto-detects the source type by mimeType: folder → recursive copy,
 spreadsheet → `files.copy`, any other file → generic `files.copy`. The same
 operations are exposed to Claude via the MCP `drive_*` tools.
+
+### Transferring ownership of a tree
+
+Ownership transfer changes a permission on the existing file, so file IDs,
+URLs, embeds, and `IMPORTRANGE` references all survive. Copying does not — it
+mints new IDs.
+
+Ownership does not cascade, and the flags that move it live on a direct
+per-file permission that cannot be inherited from a parent folder. A tree of
+3,000 items is 3,000 calls. The three commands split that by who has to be
+authenticated for each call:
+
+```bash
+# 1. Survey — any account that can see the whole tree (usually the new owner,
+#    who has inherited Editor access from the top folder). `plan` walks the tree
+#    and reports the work without touching anything; `-o` saves the manifest.
+drive-cli plan ROOT_FOLDER_ID --to=bob@example.com -o transfer.json --as=bob@example.com
+
+# 2. Transfer — once per source owner, authenticated as that owner.
+drive-cli chown transfer.json --to bob@example.com --as alice@example.com
+drive-cli chown transfer.json --to bob@example.com --as carl@example.com
+
+# 3. Accept — once, as the new owner. Covers every source owner's files.
+drive-cli accept transfer.json --as bob@example.com
+
+# 4. Reparent the top of the tree into the new owner's My Drive.
+drive-cli move ROOT_FOLDER_ID DEST_FOLDER_ID --as bob@example.com
+```
+
+`chown` picks its path per file. Two Google Workspace accounts in the same
+organization transfer in one call. Consumer accounts get `pendingOwner=true`
+and an email, and ownership does not move until `accept` runs. `--mode direct`
+or `--mode pending` forces one path; the default `auto` tries direct and falls
+back when Drive answers `consentRequiredForOwnershipTransfer`,
+`cannotTransferOwnershipToNonWorkspaceUser`, or
+`ONLY_PENDING_OWNER_CAN_BECOME_NEW_OWNER` (a node this run already offered).
+
+`plan` is the dry run for the whole operation. It reads the tree (or an existing
+manifest, with `-m`) and reports every account that owns something, how many
+folders and files each still holds, which of them have a cached token and which
+need `drive-cli auth` first, what cannot be transferred at all, and the exact
+commands to run in order. It makes no changes:
+
+```
+root      1MIZ6ZsmmILgvWr2ZamYj_C4bA-2NrBGj
+surveyed  bob@example.com
+target    bob@example.com
+nodes     412 (409 to transfer, 3 already owned)
+
+owners who must run chown (each authenticates as itself):
+  alice@example.com      380 items (24 folders, 356 files)  token cached
+  carl@example.com        29 items (2 folders, 27 files)    NEEDS LOGIN
+
+cannot transfer (shared drive): 2
+  1AbC…  quarterly-figures
+  1DeF…  vendor-list
+
+up to 1636 Drive calls
+
+run first:
+  drive-cli auth --as=carl@example.com
+```
+
+Re-run `plan -m transfer.json --to=EMAIL` between passes to see what is left.
+
+`chown` takes `--limit N` to stop after N nodes and `--only ID` (repeatable) to
+transfer a single node, so a large slice can be smoke-tested before it is
+released in full.
+
+### Progress and checkpoints
+
+`chown` and `accept` print one line per node to stderr, leaving stdout as pure
+JSON, so a run can be piped and watched at the same time:
+
+```
+[   37/653] pending        file   Pro-Forma Comments 10_18       0h01m15s elapsed, 0h20m56s left
+```
+
+`--log PATH` appends the same lines to a file, `--quiet` turns them off. The
+manifest is saved every 25 nodes (`--checkpoint N`), so a run killed partway
+keeps the record of what it already did and the next run picks up from there.
+
+Remember that `chown` alone changes nothing visible: it only marks each file
+`pendingOwner`. Files change hands during `accept`, so that is the pass to watch
+if you are checking the Drive UI.
+
+### Rate limits
+
+Drive allows 325,000 quota units per minute per user; a permission write costs
+50, so the per-minute quota is not the binding constraint on a transfer. The
+practical limit is Drive's own throttling of sharing operations, which comes
+back as **403 with reason `rateLimitExceeded` or `userRateLimitExceeded`**, not
+only as 429. `_execute_with_retry` treats those, plus `sharingRateLimitExceeded`
+and `quotaExceeded`, as retryable — five attempts with exponential backoff and
+jitter, capped at 64 seconds. Every other 403 (`insufficientFilePermissions`,
+say) still fails immediately, since retrying a refusal is pointless.
+
+`--pace SECONDS` on `chown` and `accept` sleeps between nodes to stay under the
+limit rather than backing off after hitting it. On a several-hundred-node slice,
+`--pace 0.2` costs a couple of minutes and keeps the run near 5 nodes/second.
+Nothing is lost to a throttle in any case: the manifest records each node, so a
+run that dies partway resumes where it stopped.
+
+The manifest records the outcome per node, so runs are resumable and `accept`
+knows exactly what is outstanding. `--dry-run` reports what would change without
+calling Drive, and `--verbose` adds the per-node results to the summary.
+
+Limits worth knowing before a large run:
+
+- Files on shared drives cannot be transferred — the organization owns them.
+  `inventory` flags those nodes and `chown` skips them.
+- Cross-organization Workspace transfers are refused by Drive.
+- Service accounts cannot receive ownership; they have no storage quota.
+- `files.list` only returns what the surveying account can see, so anything not
+  shared with it is missing from the manifest. Compare `owners` counts against
+  what you expect before starting.
+- Transferred files count against the new owner's storage quota.
+- Shortcuts cannot be transferred at all. Drive answers `400 ... The action
+  cannot be performed on an item of mime-type
+  application/vnd.google-apps.shortcut`, so `chown` skips them and `plan` counts
+  them as untransferable rather than as work. They stay with their current
+  owner, still pointing at the same target. To move one, delete it and create a
+  new shortcut as the new owner, which changes the shortcut's ID.
+- After `accept`, the tree root has no parent the new owner can see, so it lands
+  in their "Shared with me" until step 4 reparents it. Everything nested below
+  it follows the root and needs no move of its own.
+- The old owner keeps writer access on every transferred file. Removing that is
+  a separate sharing change.
 
 ## API Methods
 

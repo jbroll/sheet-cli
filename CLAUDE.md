@@ -54,7 +54,8 @@ sheet-cli/
 │   │   └── formats.py    # stdin/stdout formatters
 │   └── drive_cli/        # Drive-native CLI (IDs, not the target grammar)
 │       ├── cli.py        # argparse entry point
-│       └── ops.py        # shared verb core (also used by the MCP server)
+│       ├── ops.py        # shared verb core (also used by the MCP server)
+│       └── transfer.py   # ownership transfer across a folder tree
 │
 ├── mcp-server/           # MCP server exposing client to Claude Desktop
 ├── example/              # Usage examples
