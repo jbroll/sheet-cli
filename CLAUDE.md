@@ -129,6 +129,8 @@ drive-cli new     folder NAME [FOLDER]      create a folder
 drive-cli new     sheet  NAME [FOLDER]      create a spreadsheet
 drive-cli move    ID FOLDER [--add]         move into FOLDER (--add = multi-parent)
 drive-cli parents ID                        list folders containing ID
+drive-cli upload  FILE [ID] [--raw|--to K]  upload a local file (ID = folder, or file to replace)
+drive-cli export  ID FILE [--mime TYPE]     write a Drive file out locally
 ```
 
 `copy` auto-detects by mimeType: folder → recursive, spreadsheet → `files.copy`,

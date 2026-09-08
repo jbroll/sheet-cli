@@ -222,6 +222,8 @@ drive-cli new     folder NAME [FOLDER]      create a folder, optionally inside F
 drive-cli new     sheet  NAME [FOLDER]      create a spreadsheet, optionally inside FOLDER
 drive-cli move    ID FOLDER [--add]         move into FOLDER (--add keeps existing parents)
 drive-cli parents ID                        list the folders containing ID
+drive-cli upload FILE [ID] [--raw|--to doc|sheet|slides]  put a local file into Drive
+drive-cli export ID FILE [--mime TYPE]      write a Drive file out as a local file
 drive-cli inventory ROOT [-o MANIFEST]      walk a tree, recording each node's owner
 drive-cli plan   ROOT --to EMAIL           report which owners must act, without changing anything
 drive-cli chown  MANIFEST --to EMAIL        transfer one owner's files to a new owner
@@ -248,6 +250,31 @@ drive-cli move FILE_ID DEST_FOLDER
 drive-cli parents FILE_ID
 drive-cli list PARENT_FOLDER
 ```
+
+Upload and export:
+
+```bash
+drive-cli upload flyer.docx              # -> a Google Doc in My Drive root
+drive-cli upload flyer.docx FOLDER_ID    # -> a Google Doc in that folder
+drive-cli upload flyer.docx DOC_ID       # -> replaces that Doc, same URL
+drive-cli upload flyer.docx --raw        # -> stored as .docx, no conversion
+drive-cli upload notes.txt --to doc      # -> force a Doc
+drive-cli upload data --mime text/csv    # -> no extension, so state the type
+
+drive-cli export DOC_ID   out.pdf        # Doc   -> PDF
+drive-cli export DOC_ID   out.docx       # Doc   -> Word
+drive-cli export SHEET_ID out.csv        # Sheet -> CSV
+drive-cli export PDF_ID   out.pdf        # not native: a plain download
+```
+
+`upload` converts to the matching Google type by default: `.docx .doc .odt .rtf
+.txt .html .md` become a Doc, `.xlsx .xls .csv .tsv .ods` a Sheet, `.pptx .ppt
+.odp` Slides. Anything else uploads as-is. Passing a file ID rather than a
+folder ID replaces that file's bytes, keeping its ID, URL, sharing and comments.
+
+Export extensions are what Drive offers per type: Doc `pdf docx odt rtf txt html
+epub`, Sheet `pdf xlsx ods csv tsv zip`, Slides `pdf pptx odp txt`. Drive
+refuses to export a document over 10MB.
 
 `copy` auto-detects the source type by mimeType: folder → recursive copy,
 spreadsheet → `files.copy`, any other file → generic `files.copy`. The same

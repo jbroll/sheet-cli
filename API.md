@@ -69,6 +69,9 @@ client = SheetsClient(
 | `copy_folder(source_id, new_title, parent_folder_id)` | Recursively copy a Drive folder and its contents |
 | `create_folder(name, parent_folder_id)` | Create an empty Drive folder |
 | `get_file_mime(file_id)` | Drive `mimeType` of a file/folder |
+| `upload_file(path, source_mime, name, convert_to, parent_folder_id)` | Create a Drive file from local bytes, optionally converting |
+| `update_file_content(file_id, path, source_mime, name)` | Replace a Drive file's bytes, keeping its ID |
+| `export_file(file_id, out_path, export_mime)` | Write a Drive file to a local path (export or media download) |
 | `list_files(folder_id, include_shared_drives)` | List Drive files of any type |
 | `delete_spreadsheet(spreadsheet_id)` | Delete a spreadsheet via Drive API |
 | `get_parents(spreadsheet_id)` | List Drive folder IDs containing the spreadsheet |
@@ -1023,6 +1026,53 @@ def copy_folder(source_folder_id, new_title=None, parent_folder_id=None) -> dict
 
 **Returns:** `{'id', 'name', 'parents', 'copied_files', 'copied_folders'}` —
 counts are totals across the whole recursive tree.
+
+---
+
+## upload_file()
+
+Create a Drive file from local bytes. With `convert_to` set to an
+`application/vnd.google-apps.*` type, Drive converts on the way in; without it
+the bytes are stored as-is. The upload is resumable, so files past Drive's 5MB
+simple-upload limit need no separate code path.
+
+```python
+def upload_file(path, source_mime, *, name, convert_to=None,
+                parent_folder_id=None) -> dict
+```
+
+**Returns:** `{'id', 'name', 'mimeType', 'webViewLink', 'parents'}`.
+
+---
+
+## update_file_content()
+
+Replace an existing Drive file's bytes. The file keeps its ID, URL, sharing and
+comments, and Drive records a new revision. The stored format is fixed by the
+existing file, so there is no conversion argument. `name` renames as well.
+
+```python
+def update_file_content(file_id, path, source_mime, *, name=None) -> dict
+```
+
+**Returns:** `{'id', 'name', 'mimeType', 'webViewLink', 'parents'}`.
+
+---
+
+## export_file()
+
+Write a Drive file to `out_path`. With `export_mime` this is `files.export`,
+converting a Google-native document to that type; without it, a plain
+`files.get` media download. Downloads run through `MediaIoBaseDownload` in
+chunks, so a large export never has to fit in memory at once. Drive refuses to
+export a document over 10MB, which surfaces as a 403.
+
+```python
+def export_file(file_id, out_path, export_mime=None) -> dict
+```
+
+**Returns:** `{'id', 'name', 'mimeType', 'bytes'}` — `mimeType` is the Drive
+file's type, not the exported one.
 
 ---
 
