@@ -138,6 +138,14 @@ other → generic `files.copy`. `drive_cli/ops.py` is the shared verb core, reus
 by the MCP server's `drive_*` tools. Use `sheet-cli` for cells/sheets/structure,
 `drive-cli` for files/folders.
 
+`upload` resolves its optional `ID` the same way: a folder creates inside it,
+anything else replaces that file's bytes via `files.update`, keeping the ID, URL,
+sharing and comments. It converts to the matching Google type by default —
+`--raw` stores the bytes as-is, `--to doc|sheet|slides` forces a type. `export`
+branches on the source: a `google-apps.*` file is a `files.export`, anything else
+a plain media download, so `--mime` on one is an error. `drive_cli/mimes.py`
+holds the extension and export tables and imports nothing, so it tests offline.
+
 ## How You Use This
 
 ### Pattern 1: Always Discover First
