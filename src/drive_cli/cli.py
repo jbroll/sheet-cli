@@ -10,6 +10,8 @@ default, with ``--format=json`` for the raw API shape. Shares the
     drive-cli new       folder|sheet NAME [FOLDER]
     drive-cli move      ID FOLDER [--add]
     drive-cli parents   ID
+    drive-cli upload    FILE [ID] [--name NAME] [--raw | --to doc|sheet|slides] [--mime TYPE]
+    drive-cli export    ID FILE [--mime TYPE]
     drive-cli inventory ROOT [-o MANIFEST]
     drive-cli plan      ROOT --to EMAIL [-o MANIFEST]
     drive-cli chown     MANIFEST --to EMAIL [--from OWNER]
@@ -80,6 +82,17 @@ def cmd_parents(args):
         return
     for p in parents:
         print(p)
+
+
+def cmd_upload(args):
+    client = _client(args)
+    _print_json(ops.do_upload(client, args.file, args.id, raw=args.raw,
+                              to=args.to, name=args.name, mime=args.mime))
+
+
+def cmd_export(args):
+    client = _client(args)
+    _print_json(ops.do_export(client, args.id, args.file, mime=args.mime))
 
 
 def cmd_inventory(args):
@@ -276,6 +289,33 @@ def build_parser() -> argparse.ArgumentParser:
     add_format(p_parents)
     p_parents.set_defaults(func=cmd_parents)
 
+    p_upload = sub.add_parser("upload", help="upload a local file into Drive")
+    p_upload.add_argument("file", help="local file to upload")
+    p_upload.add_argument("id", nargs="?", default=None,
+                          help="destination folder ID, or a file ID whose "
+                               "content to replace; omit for My Drive root")
+    p_upload.add_argument("--name", default=None,
+                          help="name for the Drive file (default: the "
+                               "basename, without extension when converting)")
+    convert = p_upload.add_mutually_exclusive_group()
+    convert.add_argument("--raw", action="store_true",
+                         help="store the bytes as-is, no Google conversion")
+    convert.add_argument("--to", choices=["doc", "sheet", "slides"], default=None,
+                         help="force conversion to this Google type")
+    p_upload.add_argument("--mime", default=None, metavar="TYPE",
+                          help="source mimeType, when the extension is "
+                               "missing or wrong")
+    p_upload.set_defaults(func=cmd_upload)
+
+    p_export = sub.add_parser("export",
+                              help="write a Drive file out as a local file")
+    p_export.add_argument("id", help="Drive file ID")
+    p_export.add_argument("file", help="local path to write")
+    p_export.add_argument("--mime", default=None, metavar="TYPE",
+                          help="export mimeType, overriding the guess from "
+                               "FILE's extension")
+    p_export.set_defaults(func=cmd_export)
+
     p_inv = sub.add_parser("inventory",
                            help="walk a folder tree, recording every node and its owner")
     p_inv.add_argument("root", help="folder (or file) ID to inventory")
@@ -340,8 +380,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_auth = sub.add_parser("auth", help="run OAuth flow and cache token")
     p_auth.set_defaults(func=cmd_auth)
 
-    for p in (p_list, p_copy, p_new, p_move, p_parents, p_inv, p_plan, p_chown,
-              p_accept, p_auth):
+    for p in (p_list, p_copy, p_new, p_move, p_parents, p_upload, p_export,
+              p_inv, p_plan, p_chown, p_accept, p_auth):
         add_account(p)
 
     return parser

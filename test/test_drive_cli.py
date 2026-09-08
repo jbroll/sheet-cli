@@ -220,3 +220,111 @@ class TestTransferCommands:
              patch.object(sys, "stdout", io.StringIO()):
             cli.main()
         assert ctor.call_args.kwargs["token_path"].endswith("token-bob@example.com.json")
+
+
+class TestUpload:
+    @pytest.fixture
+    def upload_client(self, fake_client):
+        fake_client.upload_file.return_value = {
+            "id": "NEW", "name": "flyer",
+            "mimeType": "application/vnd.google-apps.document",
+            "webViewLink": "u", "parents": []}
+        fake_client.update_file_content.return_value = {
+            "id": "DOC1", "name": "flyer",
+            "mimeType": "application/vnd.google-apps.document",
+            "webViewLink": "u", "parents": []}
+        return fake_client
+
+    @pytest.fixture
+    def docx(self, tmp_path):
+        path = tmp_path / "flyer.docx"
+        path.write_bytes(b"x")
+        return str(path)
+
+    def test_upload_to_root_prints_json(self, upload_client, docx):
+        out, _, code = run_cli(["upload", docx], upload_client)
+        assert code in (None, 0)
+        assert json.loads(out)["action"] == "created"
+        assert upload_client.upload_file.call_args[1]["parent_folder_id"] is None
+
+    def test_upload_into_a_folder(self, upload_client, docx):
+        upload_client.get_file_mime.return_value = \
+            "application/vnd.google-apps.folder"
+        run_cli(["upload", docx, "FOLDER1"], upload_client)
+        assert upload_client.upload_file.call_args[1]["parent_folder_id"] == "FOLDER1"
+
+    def test_upload_replaces_a_file(self, upload_client, docx):
+        upload_client.get_file_mime.return_value = \
+            "application/vnd.google-apps.document"
+        out, _, _ = run_cli(["upload", docx, "DOC1"], upload_client)
+        upload_client.update_file_content.assert_called_once()
+        assert json.loads(out)["action"] == "replaced"
+
+    def test_raw_flag(self, upload_client, docx):
+        run_cli(["upload", docx, "--raw"], upload_client)
+        assert upload_client.upload_file.call_args[1]["convert_to"] is None
+
+    def test_to_flag(self, upload_client, tmp_path):
+        path = str(tmp_path / "notes.txt")
+        open(path, "w").write("hi")
+        run_cli(["upload", path, "--to", "doc"], upload_client)
+        assert upload_client.upload_file.call_args[1]["convert_to"] == \
+            "application/vnd.google-apps.document"
+
+    def test_name_and_mime_flags(self, upload_client, tmp_path):
+        path = str(tmp_path / "data")
+        open(path, "w").write("a,b")
+        run_cli(["upload", path, "--mime", "text/csv", "--name", "Q3"],
+                upload_client)
+        assert upload_client.upload_file.call_args[0][1] == "text/csv"
+        assert upload_client.upload_file.call_args[1]["name"] == "Q3"
+
+    def test_raw_and_to_are_mutually_exclusive(self, upload_client, docx):
+        _, err, code = run_cli(["upload", docx, "--raw", "--to", "doc"],
+                               upload_client)
+        assert code == 2
+        upload_client.upload_file.assert_not_called()
+
+    def test_missing_file_exits_2(self, upload_client, tmp_path):
+        _, err, code = run_cli(["upload", str(tmp_path / "absent.docx")],
+                               upload_client)
+        assert code == 2
+        assert "no such file" in err
+
+
+class TestExport:
+    @pytest.fixture
+    def export_client(self, fake_client):
+        fake_client.get_file_mime.return_value = \
+            "application/vnd.google-apps.document"
+        fake_client.export_file.return_value = {
+            "id": "DOC1", "name": "Flyer", "mimeType": "x", "bytes": 10}
+        return fake_client
+
+    def test_export_guesses_from_the_extension(self, export_client, tmp_path):
+        out_path = str(tmp_path / "out.pdf")
+        out, _, code = run_cli(["export", "DOC1", out_path], export_client)
+        assert code in (None, 0)
+        export_client.export_file.assert_called_once_with(
+            "DOC1", out_path, export_mime="application/pdf")
+        assert json.loads(out)["exported_as"] == "application/pdf"
+
+    def test_export_mime_flag(self, export_client, tmp_path):
+        out_path = str(tmp_path / "out.bin")
+        run_cli(["export", "DOC1", out_path, "--mime", "text/plain"],
+                export_client)
+        assert export_client.export_file.call_args[1]["export_mime"] == "text/plain"
+
+    def test_export_bad_extension_exits_2(self, export_client, tmp_path):
+        _, err, code = run_cli(["export", "DOC1", str(tmp_path / "out.xlsx")],
+                               export_client)
+        assert code == 2
+        assert "cannot export" in err
+
+    def test_export_mime_on_a_non_native_file_exits_2(self, export_client, tmp_path):
+        export_client.get_file_mime.return_value = "application/pdf"
+        _, err, code = run_cli(
+            ["export", "PDF1", str(tmp_path / "out.pdf"), "--mime", "application/pdf"],
+            export_client)
+        assert code == 2
+        assert "needs no conversion" in err
