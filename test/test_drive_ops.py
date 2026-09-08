@@ -226,5 +226,91 @@ class TestDoUpload:
             parent_folder_id=None)
 
 
+# -------------------------------- do_export --------------------------------
+
+SLIDES_MIME = "application/vnd.google-apps.presentation"
+
+
+class TestDoExport:
+    def _exported(self, client, name="Flyer", size=1234):
+        client.export_file.return_value = {
+            "id": "X", "name": name, "mimeType": "ignored", "bytes": size}
+
+    def test_doc_to_pdf(self, client):
+        client.get_file_mime.return_value = DOC_MIME
+        self._exported(client)
+        result = ops.do_export(client, "DOC1", "out.pdf")
+        client.export_file.assert_called_once_with(
+            "DOC1", "out.pdf", export_mime="application/pdf")
+        assert result == {"id": "DOC1", "name": "Flyer", "mimeType": DOC_MIME,
+                          "exported_as": "application/pdf", "path": "out.pdf",
+                          "bytes": 1234}
+
+    def test_doc_to_docx(self, client):
+        client.get_file_mime.return_value = DOC_MIME
+        self._exported(client)
+        ops.do_export(client, "DOC1", "out.docx")
+        assert client.export_file.call_args[1]["export_mime"] == DOCX
+
+    def test_sheet_to_csv(self, client):
+        client.get_file_mime.return_value = SHEET_MIME
+        self._exported(client)
+        ops.do_export(client, "SID", "out.csv")
+        assert client.export_file.call_args[1]["export_mime"] == "text/csv"
+
+    def test_slides_to_pptx(self, client):
+        client.get_file_mime.return_value = SLIDES_MIME
+        self._exported(client)
+        ops.do_export(client, "PID", "out.pptx")
+        assert client.export_file.call_args[1]["export_mime"].endswith(
+            "presentationml.presentation")
+
+    def test_mime_overrides_the_extension_guess(self, client):
+        client.get_file_mime.return_value = DOC_MIME
+        self._exported(client)
+        result = ops.do_export(client, "DOC1", "out.bin", mime="application/pdf")
+        assert client.export_file.call_args[1]["export_mime"] == "application/pdf"
+        assert result["exported_as"] == "application/pdf"
+
+    def test_non_native_file_is_a_plain_media_download(self, client):
+        client.get_file_mime.return_value = "application/pdf"
+        self._exported(client, name="scan.pdf", size=99)
+        result = ops.do_export(client, "PDF1", "out.pdf")
+        client.export_file.assert_called_once_with(
+            "PDF1", "out.pdf", export_mime=None)
+        assert result["exported_as"] == "application/pdf"
+        assert result["bytes"] == 99
+
+    def test_mime_on_a_non_native_file_raises(self, client):
+        client.get_file_mime.return_value = "application/pdf"
+        with pytest.raises(ValueError, match="needs no conversion"):
+            ops.do_export(client, "PDF1", "out.pdf", mime="application/pdf")
+        client.export_file.assert_not_called()
+
+    def test_extension_invalid_for_the_type_lists_the_valid_ones(self, client):
+        client.get_file_mime.return_value = SHEET_MIME
+        with pytest.raises(ValueError, match="xlsx"):
+            ops.do_export(client, "SID", "out.epub")
+        client.export_file.assert_not_called()
+
+    def test_export_over_the_size_limit_is_re_raised_with_the_reason(self, client):
+        from sheet_client.exceptions import SheetsAPIError, SheetsClientError
+
+        client.get_file_mime.return_value = DOC_MIME
+        client.export_file.side_effect = SheetsAPIError(
+            "API error 403: exportSizeLimitExceeded", status_code=403)
+        with pytest.raises(SheetsClientError, match="10MB"):
+            ops.do_export(client, "DOC1", "out.pdf")
+
+    def test_other_api_errors_pass_through(self, client):
+        from sheet_client.exceptions import SheetsAPIError
+
+        client.get_file_mime.return_value = DOC_MIME
+        client.export_file.side_effect = SheetsAPIError(
+            "API error 404: not found", status_code=404)
+        with pytest.raises(SheetsAPIError, match="404"):
+            ops.do_export(client, "DOC1", "out.pdf")
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

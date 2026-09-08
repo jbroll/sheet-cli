@@ -11,11 +11,13 @@ import os
 from typing import Any, Dict, List, Optional
 
 from sheet_client import SheetsClient
+from sheet_client.exceptions import SheetsAPIError, SheetsClientError
 
 from . import mimes
 
 FOLDER_MIME = "application/vnd.google-apps.folder"
 SPREADSHEET_MIME = "application/vnd.google-apps.spreadsheet"
+NATIVE_PREFIX = "application/vnd.google-apps."
 
 
 def do_list(client: SheetsClient, folder: Optional[str] = None) -> List[dict]:
@@ -124,3 +126,40 @@ def _upload_create(client: SheetsClient, path: str, source: str,
     result = client.upload_file(path, source, name=name, convert_to=convert_to,
                                 parent_folder_id=folder)
     return {"action": "created", **result}
+
+
+def do_export(client: SheetsClient, file_id: str, out_path: str, *,
+              mime: Optional[str] = None) -> Dict[str, Any]:
+    """Write a Drive file to ``out_path``.
+
+    A Google-native file is exported, with the type coming from ``--mime`` or
+    ``out_path``'s extension. Any other file has nothing to convert, so it is a
+    plain media download.
+    """
+    file_mime = client.get_file_mime(file_id)
+
+    if file_mime.startswith(NATIVE_PREFIX):
+        target = mime or mimes.export_mime(file_mime, out_path)
+    else:
+        if mime is not None:
+            raise ValueError(
+                f"{file_id} is {file_mime}, which needs no conversion; drop --mime")
+        target = None
+
+    try:
+        result = client.export_file(file_id, out_path, export_mime=target)
+    except SheetsAPIError as e:
+        if "exportSizeLimitExceeded" in str(e):
+            raise SheetsClientError(
+                "Drive refuses to export a document over 10MB; download a .pdf "
+                "from the Drive UI instead") from e
+        raise
+
+    return {
+        "id": file_id,
+        "name": result.get("name"),
+        "mimeType": file_mime,
+        "exported_as": target or file_mime,
+        "path": out_path,
+        "bytes": result.get("bytes"),
+    }
