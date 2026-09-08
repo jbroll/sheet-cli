@@ -409,5 +409,166 @@ class TestDriveCopyPrimitives:
         client.update_parents.assert_not_called()
 
 
+class TestDriveTransferPrimitives:
+    """upload_file / update_file_content / export_file."""
+
+    def _make_client(self):
+        from unittest.mock import MagicMock
+        from sheet_client.client import SheetsClient
+
+        mock_drive = MagicMock()
+        client = SheetsClient.__new__(SheetsClient)
+        client.drive = mock_drive
+        client._execute_with_retry = MagicMock()
+        return client, mock_drive
+
+    # ------------------------------- upload_file -----------------------------
+
+    def test_upload_file_converts_and_places_in_folder(self, tmp_path):
+        from unittest.mock import patch
+        client, mock_drive = self._make_client()
+        client._execute_with_retry.return_value = {
+            "id": "NEW", "name": "flyer",
+            "mimeType": "application/vnd.google-apps.document",
+            "webViewLink": "https://docs.google.com/document/d/NEW",
+            "parents": ["FOLDER"],
+        }
+        src = tmp_path / "flyer.docx"
+        src.write_bytes(b"x")
+        with patch("sheet_client.client.MediaFileUpload") as media:
+            result = client.upload_file(
+                str(src), "application/msword", name="flyer",
+                convert_to="application/vnd.google-apps.document",
+                parent_folder_id="FOLDER")
+        assert media.call_args[1]["resumable"] is True
+        assert media.call_args[1]["mimetype"] == "application/msword"
+        body = mock_drive.files.return_value.create.call_args[1]["body"]
+        assert body["name"] == "flyer"
+        assert body["parents"] == ["FOLDER"]
+        assert body["mimeType"] == "application/vnd.google-apps.document"
+        assert result["id"] == "NEW"
+        assert result["webViewLink"].endswith("NEW")
+
+    def test_upload_file_raw_omits_mimetype_and_parents(self, tmp_path):
+        from unittest.mock import patch
+        client, mock_drive = self._make_client()
+        client._execute_with_retry.return_value = {
+            "id": "NEW", "name": "flyer.docx", "mimeType": "application/msword",
+            "webViewLink": "u", "parents": [],
+        }
+        src = tmp_path / "flyer.docx"
+        src.write_bytes(b"x")
+        with patch("sheet_client.client.MediaFileUpload"):
+            client.upload_file(str(src), "application/msword", name="flyer.docx")
+        body = mock_drive.files.return_value.create.call_args[1]["body"]
+        assert "mimeType" not in body
+        assert "parents" not in body
+
+    # --------------------------- update_file_content -------------------------
+
+    def test_update_file_content_keeps_the_id_and_omits_an_absent_name(self, tmp_path):
+        from unittest.mock import patch
+        client, mock_drive = self._make_client()
+        client._execute_with_retry.return_value = {
+            "id": "DOC1", "name": "Flyer",
+            "mimeType": "application/vnd.google-apps.document",
+            "webViewLink": "u", "parents": ["FOLDER"],
+        }
+        src = tmp_path / "flyer.docx"
+        src.write_bytes(b"x")
+        with patch("sheet_client.client.MediaFileUpload"):
+            result = client.update_file_content(
+                "DOC1", str(src), "application/msword")
+        kwargs = mock_drive.files.return_value.update.call_args[1]
+        assert kwargs["fileId"] == "DOC1"
+        assert "name" not in kwargs["body"]
+        assert result["id"] == "DOC1"
+
+    def test_update_file_content_renames_when_given_a_name(self, tmp_path):
+        from unittest.mock import patch
+        client, mock_drive = self._make_client()
+        client._execute_with_retry.return_value = {
+            "id": "DOC1", "name": "Renamed", "mimeType": "x",
+            "webViewLink": "u", "parents": [],
+        }
+        src = tmp_path / "flyer.docx"
+        src.write_bytes(b"x")
+        with patch("sheet_client.client.MediaFileUpload"):
+            client.update_file_content("DOC1", str(src), "application/msword",
+                                       name="Renamed")
+        body = mock_drive.files.return_value.update.call_args[1]["body"]
+        assert body["name"] == "Renamed"
+
+    # ------------------------------- export_file -----------------------------
+
+    def _fake_downloader(self, payload):
+        """Patch MediaIoBaseDownload so next_chunk writes payload and finishes."""
+        from unittest.mock import MagicMock
+
+        def factory(fh, request):
+            downloader = MagicMock()
+
+            def next_chunk(num_retries=0):
+                fh.write(payload)
+                return (MagicMock(), True)
+
+            downloader.next_chunk.side_effect = next_chunk
+            return downloader
+
+        return factory
+
+    def test_export_file_uses_export_media_and_reports_bytes(self, tmp_path):
+        from unittest.mock import patch
+        client, mock_drive = self._make_client()
+        client._execute_with_retry.return_value = {
+            "name": "Flyer", "mimeType": "application/vnd.google-apps.document"}
+        out = tmp_path / "out.pdf"
+        with patch("sheet_client.client.MediaIoBaseDownload",
+                   side_effect=self._fake_downloader(b"PDFDATA")):
+            result = client.export_file("DOC1", str(out),
+                                        export_mime="application/pdf")
+        kwargs = mock_drive.files.return_value.export_media.call_args[1]
+        assert kwargs["fileId"] == "DOC1"
+        assert kwargs["mimeType"] == "application/pdf"
+        assert out.read_bytes() == b"PDFDATA"
+        assert result == {"id": "DOC1", "name": "Flyer",
+                          "mimeType": "application/vnd.google-apps.document",
+                          "bytes": 7}
+
+    def test_export_file_without_export_mime_downloads_media(self, tmp_path):
+        from unittest.mock import patch
+        client, mock_drive = self._make_client()
+        client._execute_with_retry.return_value = {
+            "name": "scan.pdf", "mimeType": "application/pdf"}
+        out = tmp_path / "out.pdf"
+        with patch("sheet_client.client.MediaIoBaseDownload",
+                   side_effect=self._fake_downloader(b"RAW")):
+            client.export_file("PDF1", str(out))
+        mock_drive.files.return_value.export_media.assert_not_called()
+        assert mock_drive.files.return_value.get_media.call_args[1]["fileId"] == "PDF1"
+
+    def test_export_file_converts_http_error_to_sheets_api_error(self, tmp_path):
+        from unittest.mock import MagicMock, patch
+        from googleapiclient.errors import HttpError
+        from sheet_client.exceptions import SheetsAPIError
+
+        client, mock_drive = self._make_client()
+        client._execute_with_retry.return_value = {"name": "Big", "mimeType": "m"}
+        resp = MagicMock()
+        resp.status = 403
+        error = HttpError(resp, b'{"error": {"errors": '
+                                b'[{"reason": "exportSizeLimitExceeded"}]}}')
+
+        def factory(fh, request):
+            downloader = MagicMock()
+            downloader.next_chunk.side_effect = error
+            return downloader
+
+        out = tmp_path / "out.pdf"
+        with patch("sheet_client.client.MediaIoBaseDownload", side_effect=factory):
+            with pytest.raises(SheetsAPIError, match="exportSizeLimitExceeded"):
+                client.export_file("DOC1", str(out), export_mime="application/pdf")
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

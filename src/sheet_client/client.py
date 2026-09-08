@@ -1,5 +1,7 @@
 """Main Google Sheets API client."""
 
+import io
+import os
 import random
 import time
 from enum import IntFlag
@@ -7,6 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 
 from .auth import get_credentials
 from .exceptions import SheetsAPIError, RateLimitError, ServerError
@@ -762,6 +765,121 @@ class SheetsClient:
             'mimeType': response.get('mimeType'),
             'parents': response.get('parents', []),
             'url': f"https://drive.google.com/file/d/{response['id']}",
+        }
+
+    def upload_file(self, path: str, source_mime: str, *, name: str,
+                    convert_to: Optional[str] = None,
+                    parent_folder_id: Optional[str] = None) -> dict:
+        """Create a Drive file from local bytes, optionally converting it.
+
+        Args:
+            path: Local file to upload.
+            source_mime: The mimeType of the local bytes.
+            name: Name for the new Drive file.
+            convert_to: A ``application/vnd.google-apps.*`` type to convert to.
+                When omitted the bytes are stored as-is.
+            parent_folder_id: Drive folder to create it in. When omitted, the
+                file lands in the user's My Drive root.
+
+        Returns:
+            ``{'id', 'name', 'mimeType', 'webViewLink', 'parents'}``.
+        """
+        body: Dict[str, Any] = {'name': name}
+        if parent_folder_id:
+            body['parents'] = [parent_folder_id]
+        if convert_to:
+            body['mimeType'] = convert_to
+
+        media = MediaFileUpload(path, mimetype=source_mime, resumable=True)
+        request = self.drive.files().create(
+            body=body,
+            media_body=media,
+            fields='id,name,mimeType,webViewLink,parents',
+        )
+        return self._file_result(self._execute_with_retry(request))
+
+    def update_file_content(self, file_id: str, path: str, source_mime: str, *,
+                            name: Optional[str] = None) -> dict:
+        """Replace an existing Drive file's bytes, keeping its ID.
+
+        The file keeps its URL, sharing and comments; Drive records a new
+        revision. The stored format is fixed by the existing file, so there is
+        no conversion argument.
+
+        Args:
+            file_id: The Drive file to overwrite.
+            path: Local file supplying the new bytes.
+            source_mime: The mimeType of those bytes.
+            name: Rename the file as well. When omitted the name is unchanged.
+
+        Returns:
+            ``{'id', 'name', 'mimeType', 'webViewLink', 'parents'}``.
+        """
+        body: Dict[str, Any] = {'name': name} if name else {}
+        media = MediaFileUpload(path, mimetype=source_mime, resumable=True)
+        request = self.drive.files().update(
+            fileId=file_id,
+            body=body,
+            media_body=media,
+            fields='id,name,mimeType,webViewLink,parents',
+        )
+        return self._file_result(self._execute_with_retry(request))
+
+    def export_file(self, file_id: str, out_path: str,
+                    export_mime: Optional[str] = None) -> dict:
+        """Write a Drive file to ``out_path``.
+
+        With ``export_mime`` this is ``files.export`` — converting a
+        Google-native document to that type. Without it, a plain
+        ``files.get`` media download.
+
+        ``MediaIoBaseDownload`` owns its own request cycle, so the chunk loop
+        does its 429/5xx backoff through ``num_retries`` rather than
+        :meth:`_execute_with_retry`. Its ``HttpError`` is converted so callers
+        see one exception type.
+
+        Returns:
+            ``{'id', 'name', 'mimeType', 'bytes'}`` — ``mimeType`` is the
+            Drive file's type, not the exported one.
+        """
+        meta = self._execute_with_retry(
+            self.drive.files().get(fileId=file_id, fields='name,mimeType'))
+
+        if export_mime:
+            request = self.drive.files().export_media(
+                fileId=file_id, mimeType=export_mime)
+        else:
+            request = self.drive.files().get_media(fileId=file_id)
+
+        with io.FileIO(out_path, 'wb') as fh:
+            downloader = MediaIoBaseDownload(fh, request)
+            done = False
+            while not done:
+                try:
+                    _status, done = downloader.next_chunk(num_retries=5)
+                except HttpError as e:
+                    raise SheetsAPIError(
+                        f"API error {e.resp.status}: "
+                        f"{e.content.decode('utf-8', 'replace')}",
+                        status_code=e.resp.status,
+                        response=e.error_details if hasattr(e, 'error_details') else None
+                    )
+
+        return {
+            'id': file_id,
+            'name': meta.get('name'),
+            'mimeType': meta.get('mimeType'),
+            'bytes': os.path.getsize(out_path),
+        }
+
+    def _file_result(self, response: dict) -> dict:
+        """Shape a ``files`` response into the upload/replace result dict."""
+        return {
+            'id': response['id'],
+            'name': response.get('name'),
+            'mimeType': response.get('mimeType'),
+            'webViewLink': response.get('webViewLink'),
+            'parents': response.get('parents', []),
         }
 
     def copy_folder(self, source_folder_id: str,
