@@ -157,6 +157,9 @@ sheet-cli get SID
 # A single cell (text output; use --format=json for raw API shape)
 sheet-cli get SID:Sheet1!A1
 
+# Computed values instead of formulas (formatted = as displayed)
+sheet-cli get SID:Sheet1!A1:C10 --render=unformatted
+
 # Scalar write (sugar)
 sheet-cli put SID:Sheet1!A1 "hello world"
 
@@ -204,6 +207,7 @@ sheet-cli get SID:Sheet1.conditional
 ### Output rules
 
 - `get` prints cell/value text by default; `--format=json` emits the raw API response.
+- `get` shows formulas by default; `--render=formatted` or `--render=unformatted` returns computed values instead.
 - Mutations (`put`, `del`, `copy`, `move`) are silent by default; `--format=json` echoes the target and response.
 - `new` always emits JSON (the new SID / sheet properties are the point).
 

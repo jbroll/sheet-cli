@@ -92,6 +92,19 @@ class TestCliGet:
         assert code == 2
         assert "folder" in stderr.lower()
 
+    def test_get_render_flag_forwarded_to_read(self, fake_client):
+        run_cli(["get", "SID:Sheet1!A1", "--render", "unformatted"], fake_client)
+        assert fake_client.read.call_args.kwargs["value_render"] == "UNFORMATTED_VALUE"
+
+    def test_get_render_with_spreadsheet_target_exits_error(self, fake_client):
+        _, stderr, code = run_cli(["get", "SID", "--render", "formatted"], fake_client)
+        assert code == 2
+        assert "render" in stderr.lower()
+
+    def test_get_render_rejects_unknown_choice(self, fake_client):
+        _, _, code = run_cli(["get", "SID:Sheet1!A1", "--render", "raw"], fake_client)
+        assert code == 2
+
 
 # ================================ put =====================================
 

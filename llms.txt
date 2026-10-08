@@ -77,6 +77,12 @@ All six verbs apply uniformly to properties (where semantically meaningful).
 | `put` / `del` / `copy` / `move` | silent | `{target, response}` |
 | `new` | always JSON | always JSON |
 
+`get --render` picks what cell reads (sheet / range / row / column) return:
+`formula` (default) shows formulas as `=…` and literals as entered,
+`formatted` shows computed values as displayed (`$1,234.00`), and
+`unformatted` shows computed values raw (`1234`). It maps to the API's
+`valueRenderOption` and is an error on other targets.
+
 Exit codes: `0` success, `1` API/auth error, `2` grammar error.
 429 / 500 / 503 responses retry automatically (exponential backoff, 3 attempts).
 
@@ -114,6 +120,9 @@ sheet-cli get SID:Sheet1!A1
 
 # Read a range (raw API)
 sheet-cli get SID:Sheet1!A1:C10 --format=json
+
+# Read computed values instead of formulas
+sheet-cli get SID:Sheet1!A1:C10 --render=unformatted
 
 # Single-cell write
 sheet-cli put SID:Sheet1!A1 "hello"

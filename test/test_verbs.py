@@ -76,6 +76,19 @@ class TestDoGet:
         args, _ = client.read.call_args
         assert args[1] == ["Sheet1!C"]
 
+    def test_range_defaults_to_formula_render(self, client):
+        do_get(client, Target("SID", "Sheet1", "A1"))
+        assert client.read.call_args.kwargs["value_render"] == "FORMULA"
+
+    @pytest.mark.parametrize("render, api", [
+        ("formula", "FORMULA"),
+        ("formatted", "FORMATTED_VALUE"),
+        ("unformatted", "UNFORMATTED_VALUE"),
+    ])
+    def test_render_maps_to_api_value_render_option(self, client, render, api):
+        do_get(client, Target("SID", "Sheet1", "A1"), render=render)
+        assert client.read.call_args.kwargs["value_render"] == api
+
 
 # =============================== do_put ===================================
 

@@ -135,7 +135,8 @@ class SheetsClient:
         raise SheetsAPIError("Unexpected error in retry logic")
 
     def read(self, spreadsheet_id: str, ranges: List[str],
-             types: int = CellData.VALUE) -> dict:
+             types: int = CellData.VALUE,
+             value_render: Optional[str] = None) -> dict:
         """Read cells from specified ranges.
 
         Args:
@@ -155,6 +156,10 @@ class SheetsClient:
                 Combine with | operator:
                     CellData.VALUE | CellData.FORMULA
                     CellData.VALUE | CellData.FORMULA | CellData.FORMAT
+
+            value_render: API valueRenderOption, overriding the one implied
+                by ``types``: 'FORMULA', 'FORMATTED_VALUE', or
+                'UNFORMATTED_VALUE'. Ignored with FORMAT or NOTE.
 
         Returns:
             Raw API response dict with requested cell data.
@@ -212,7 +217,8 @@ class SheetsClient:
             )
             return self._execute_with_retry(request)
 
-        value_render = 'FORMULA' if (types & CellData.FORMULA) else 'FORMATTED_VALUE'
+        if value_render is None:
+            value_render = 'FORMULA' if (types & CellData.FORMULA) else 'FORMATTED_VALUE'
 
         if len(ranges) == 1:
             request = self.spreadsheets.values().get(

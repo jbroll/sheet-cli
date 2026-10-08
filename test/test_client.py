@@ -409,6 +409,39 @@ class TestDriveCopyPrimitives:
         client.update_parents.assert_not_called()
 
 
+class TestReadValueRender:
+    def _make_client(self):
+        from unittest.mock import MagicMock
+        from sheet_client.client import SheetsClient
+        client = SheetsClient.__new__(SheetsClient)
+        client.spreadsheets = MagicMock()
+        client._execute_with_retry = MagicMock(return_value={})
+        return client, client.spreadsheets.values.return_value
+
+    def test_formula_flag_selects_formula_render(self):
+        from sheet_client.client import CellData
+        client, values = self._make_client()
+        client.read("SID", ["Sheet1!A1"], types=CellData.VALUE | CellData.FORMULA)
+        assert values.get.call_args.kwargs["valueRenderOption"] == "FORMULA"
+
+    def test_value_only_selects_formatted_render(self):
+        client, values = self._make_client()
+        client.read("SID", ["Sheet1!A1"])
+        assert values.get.call_args.kwargs["valueRenderOption"] == "FORMATTED_VALUE"
+
+    def test_explicit_value_render_overrides_flags(self):
+        from sheet_client.client import CellData
+        client, values = self._make_client()
+        client.read("SID", ["Sheet1!A1"], types=CellData.VALUE | CellData.FORMULA,
+                    value_render="UNFORMATTED_VALUE")
+        assert values.get.call_args.kwargs["valueRenderOption"] == "UNFORMATTED_VALUE"
+
+    def test_explicit_value_render_applies_to_batch_get(self):
+        client, values = self._make_client()
+        client.read("SID", ["Sheet1!A1", "Sheet2!B2"], value_render="UNFORMATTED_VALUE")
+        assert values.batchGet.call_args.kwargs["valueRenderOption"] == "UNFORMATTED_VALUE"
+
+
 class TestDriveTransferPrimitives:
     """upload_file / update_file_content / export_file."""
 

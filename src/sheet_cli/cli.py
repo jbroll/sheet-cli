@@ -135,7 +135,14 @@ def cmd_get(args):
     if folder_id is not None and classify(target) != TargetType.DRIVE:
         print("grammar error: --folder only applies to Drive-level listing (omit target)", file=sys.stderr)
         sys.exit(2)
-    response = verbs.do_get(client, target, folder_id=folder_id)
+    reads_values = target.property is None and classify(target) not in (
+        TargetType.DRIVE, TargetType.SPREADSHEET)
+    if args.render is not None and not reads_values:
+        print("grammar error: --render only applies to sheet, range, row, or column reads",
+              file=sys.stderr)
+        sys.exit(2)
+    response = verbs.do_get(client, target, folder_id=folder_id,
+                            render=args.render or "formula")
     _emit_get(target, response, args.format == "json")
 
 
@@ -256,6 +263,9 @@ def main():
                        help="target string; omit for Drive-level listing")
     p_get.add_argument("--folder", default=None, metavar="FOLDER_ID",
                        help="filter Drive listing to spreadsheets inside this folder (Drive-level only)")
+    p_get.add_argument("--render", choices=list(verbs.RENDER_OPTIONS), default=None,
+                       help="cell rendering: formula (default), formatted (displayed "
+                            "text), or unformatted (raw computed values)")
     add_format(p_get)
     p_get.set_defaults(func=cmd_get)
 

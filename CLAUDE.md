@@ -82,6 +82,8 @@ Target syntax: `SID:Sheet!locator`. Second-operand parts can be omitted to
 inherit from the first (e.g., `:Sheet2!A1` for same SID, different sheet).
 Output: `get` is text-first (use `--format=json` for API shape); mutations
 are silent (use `--format=json` to echo); `new` always prints JSON.
+`get --render formula|formatted|unformatted` maps to `valueRenderOption`
+for cell reads; the default `formula` shows formulas, the others computed values.
 
 ### Properties — `TARGET.property`
 

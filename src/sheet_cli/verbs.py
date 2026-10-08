@@ -64,14 +64,24 @@ def _locator_to_dimension_range(target: Target, sheet_id: int) -> Dict[str, Any]
 # ------------------------------ get --------------------------------
 
 
+RENDER_OPTIONS = {
+    "formula": "FORMULA",
+    "formatted": "FORMATTED_VALUE",
+    "unformatted": "UNFORMATTED_VALUE",
+}
+
+
 def do_get(client: SheetsClient, target: Target,
-           folder_id: Optional[str] = None) -> Any:
+           folder_id: Optional[str] = None,
+           render: str = "formula") -> Any:
     """Read what's at the target. Returns the raw API response.
 
     - DRIVE        → list of spreadsheet file metadata
     - SPREADSHEET  → full meta_read() response
     - SHEET        → values.get response for the whole sheet
     - RANGE/ROW/COL→ values.get response for the locator
+
+    ``render`` (a key of RENDER_OPTIONS) applies to the values.get reads.
     """
     if target.property is not None:
         from . import properties
@@ -92,6 +102,7 @@ def do_get(client: SheetsClient, target: Target,
         target.spreadsheet_id,
         [a1],
         types=CellData.VALUE | CellData.FORMULA,
+        value_render=RENDER_OPTIONS[render],
     )
 
 

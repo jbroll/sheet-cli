@@ -57,7 +57,7 @@ client = SheetsClient(
 | Method | Description |
 |--------|-------------|
 | `list_spreadsheets(include_shared_drives)` | List spreadsheets from Google Drive |
-| `read(spreadsheet_id, ranges, types)` | Read cell data |
+| `read(spreadsheet_id, ranges, types, value_render)` | Read cell data |
 | `write(spreadsheet_id, data)` | Write cell data (batch) |
 | `clear(spreadsheet_id, ranges)` | Clear cell values (preserves formatting/notes) |
 | `meta_read(spreadsheet_id)` | Read metadata/structure |
@@ -151,7 +151,8 @@ Read cells from specified ranges.
 def read(
     spreadsheet_id: str,
     ranges: List[str],
-    types: int = CellData.VALUE
+    types: int = CellData.VALUE,
+    value_render: Optional[str] = None
 ) -> dict
 ```
 
@@ -170,6 +171,13 @@ def read(
   - `CellData.FORMAT` - Cell formatting
   - `CellData.NOTE` - Cell notes/comments
   - Combine with `|` operator
+
+- `value_render` - API `valueRenderOption`, overriding the one `types` implies
+  (`FORMULA` when `FORMULA` is set, else `FORMATTED_VALUE`)
+  - `'FORMULA'` - Formulas as strings, literals as entered
+  - `'FORMATTED_VALUE'` - Computed values as displayed (`'$1,234.00'`)
+  - `'UNFORMATTED_VALUE'` - Computed values raw (`1234`)
+  - Ignored with `FORMAT` or `NOTE`
 
 **Returns:**
 
@@ -207,6 +215,13 @@ data = client.read(
     'spreadsheet-id',
     ['Sheet1!A1:C10'],
     types=CellData.VALUE | CellData.FORMULA
+)
+
+# Read raw computed values (numbers as numbers, no display formatting)
+data = client.read(
+    'spreadsheet-id',
+    ['Sheet1!A1:C10'],
+    value_render='UNFORMATTED_VALUE'
 )
 
 # Read everything
