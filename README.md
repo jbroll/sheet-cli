@@ -148,8 +148,9 @@ through the Drive API (everything else is pure Sheets API).
 ### Examples
 
 ```bash
-# List spreadsheets in Drive
+# List spreadsheets in Drive, or only those directly inside one folder
 sheet-cli get
+sheet-cli get --folder FOLDER_ID
 
 # Full spreadsheet metadata
 sheet-cli get SID

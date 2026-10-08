@@ -83,6 +83,9 @@ All six verbs apply uniformly to properties (where semantically meaningful).
 `unformatted` shows computed values raw (`1234`). It maps to the API's
 `valueRenderOption` and is an error on other targets.
 
+`get --folder FOLDER_ID` limits the Drive listing to spreadsheets directly
+inside that folder. It is an error with any target.
+
 Exit codes: `0` success, `1` API/auth error, `2` grammar error.
 429 / 500 / 503 responses retry automatically (exponential backoff, 3 attempts).
 
@@ -109,8 +112,9 @@ pass through unchanged.
 ## Examples
 
 ```bash
-# Drive listing
+# Drive listing (all spreadsheets, or those directly inside FOLDER_ID)
 sheet-cli get
+sheet-cli get --folder FOLDER_ID
 
 # Spreadsheet metadata
 sheet-cli get SID

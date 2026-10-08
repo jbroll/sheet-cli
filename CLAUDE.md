@@ -140,6 +140,10 @@ other → generic `files.copy`. `drive_cli/ops.py` is the shared verb core, reus
 by the MCP server's `drive_*` tools. Use `sheet-cli` for cells/sheets/structure,
 `drive-cli` for files/folders.
 
+`SheetsClient.copy_folder` is the one composed helper in the library, an
+exception to "no helpers": Drive has no recursive-copy call, so the recursion
+has to live somewhere, and it stays inside that one method.
+
 `upload` resolves its optional `ID` the same way: a folder creates inside it,
 anything else replaces that file's bytes via `files.update`, keeping the ID, URL,
 sharing and comments. It converts to the matching Google type by default —

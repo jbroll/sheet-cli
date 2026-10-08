@@ -56,7 +56,7 @@ client = SheetsClient(
 
 | Method | Description |
 |--------|-------------|
-| `list_spreadsheets(include_shared_drives)` | List spreadsheets from Google Drive |
+| `list_spreadsheets(folder_id, include_shared_drives)` | List spreadsheets from Google Drive, optionally inside one folder |
 | `read(spreadsheet_id, ranges, types, value_render)` | Read cell data |
 | `write(spreadsheet_id, data)` | Write cell data (batch) |
 | `clear(spreadsheet_id, ranges)` | Clear cell values (preserves formatting/notes) |
@@ -105,10 +105,12 @@ client.read('spreadsheet-id', ['Sheet1!A1:C10'], types=CellData.VALUE | CellData
 List spreadsheets visible to the authenticated user via Google Drive API.
 
 ```python
-def list_spreadsheets(include_shared_drives: bool = False) -> List[dict]
+def list_spreadsheets(folder_id: Optional[str] = None,
+                      include_shared_drives: bool = False) -> List[dict]
 ```
 
 **Parameters:**
+- `folder_id` — Drive folder ID. When set, returns only spreadsheets directly inside that folder (no subfolders). An empty folder returns `[]`; an unknown or inaccessible ID raises `SheetsAPIError`.
 - `include_shared_drives` — If True, also searches Shared Drives (team/org drives). Default False returns files from My Drive and Shared With Me.
 
 **Returns:**
@@ -136,6 +138,9 @@ The `id` field is the spreadsheet ID used by all other methods.
 files = client.list_spreadsheets()
 for f in files:
     print(f['id'], f['name'])
+
+# Only spreadsheets directly inside one folder
+files = client.list_spreadsheets(folder_id='FOLDER_ID')
 
 # Include shared/team drives
 files = client.list_spreadsheets(include_shared_drives=True)
@@ -1033,7 +1038,8 @@ def copy_file(source_id, new_title=None, parent_folder_id=None) -> dict
 
 Recursively copy a Drive folder and its contents. Composes the recursion Drive
 lacks: create a new folder, copy each child into it, recurse into subfolders.
-Copying a folder into itself raises `ValueError`.
+Copying a folder into itself raises `ValueError`. A failed child copy raises
+and stops the walk, leaving the partial copy in place. No child is skipped.
 
 ```python
 def copy_folder(source_folder_id, new_title=None, parent_folder_id=None) -> dict
