@@ -7,6 +7,7 @@ Verbs:
     new    [TARGET] [--side ...] create a spreadsheet / sheet / row / col
     copy   SOURCE DEST           copy (server-side where possible)
     move   SOURCE DEST           move (server-side where possible)
+    batch  SID --file ops.json   apply a list of operations in one call
 
     auth                         OAuth login
     help                         detailed grammar reference
@@ -30,13 +31,13 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from sheet_client import SheetsClient
 from sheet_client.auth import get_credentials
 from sheet_client.exceptions import AuthenticationError, SheetsClientError
 
-from . import dispatch, formats, verbs
+from . import batch, dispatch, formats, verbs
 from .grammar import (
     GrammarError,
     Target,
@@ -118,11 +119,18 @@ def _emit_mutation(target: Target, response: Any, as_json: bool) -> None:
 # ----------------------------- stdin helpers -------------------------------
 
 
-def _read_data_from_stdin() -> Optional[Any]:
-    text = formats.read_stdin()
-    if not text:
-        return None
-    return formats.parse_input(text)
+def _read_input_source(args) -> str:
+    """Return the payload text: from ``--file PATH`` if given, else stdin.
+
+    ``--file -`` reads stdin explicitly.
+    """
+    path = getattr(args, "file", None)
+    if path is None or path == "-":
+        return formats.read_stdin()
+    p = Path(path)
+    if not p.is_file():
+        raise GrammarError(f"--file: not a readable file: {path}")
+    return p.read_text()
 
 
 # --------------------------------- verbs -----------------------------------
@@ -151,14 +159,17 @@ def cmd_put(args):
     target = _parse_target(args.target)
 
     if args.value is not None:
+        if getattr(args, "file", None) is not None:
+            raise GrammarError("put: cannot combine a positional value with --file")
         data: Any = args.value
     else:
-        data = _read_data_from_stdin()
+        text = _read_input_source(args)
+        data = formats.parse_input(text) if text else None
         # Property targets may accept no body (e.g. ``.autofit``, empty
         # ``.filter``, bare ``.protected``). Let the property layer decide.
         # Value writes still require explicit data.
         if data is None and target.property is None:
-            print("put: no value given and no stdin", file=sys.stderr)
+            print("put: no value given and no input", file=sys.stderr)
             sys.exit(1)
 
     response = verbs.do_put(client, target, data)
@@ -175,8 +186,12 @@ def cmd_del(args):
 def cmd_new(args):
     client = SheetsClient()
     target = _parse_target(args.target or "")
-    # Property collections (e.g. `.conditional`, `.named`) take a body from stdin.
-    data = _read_data_from_stdin() if target.property is not None else None
+    # Property collections (e.g. `.conditional`, `.named`) take a body.
+    if target.property is not None:
+        text = _read_input_source(args)
+        data = formats.parse_input(text) if text else None
+    else:
+        data = None
     response = verbs.do_new(client, target, side=args.side, data=data)
     # new always echoes — the user needs the new ID/properties.
     _print_json(response)
@@ -196,6 +211,30 @@ def cmd_move(args):
     dest = _parse_second(args.dest, source)
     response = dispatch.do_move(client, source, dest)
     _emit_mutation(dest, response, args.format == "json")
+
+
+def cmd_batch(args):
+    client = SheetsClient()
+    sid = args.spreadsheet_id
+    text = _read_input_source(args)
+    if not text.strip():
+        raise GrammarError("batch: no operations given (use --file or stdin)")
+    try:
+        ops = json.loads(text)
+    except json.JSONDecodeError as e:
+        raise GrammarError(f"batch: invalid JSON: {e}")
+
+    plan = batch.build_batch(ops, lambda title: verbs._resolve_sheet_id(client, sid, title))
+
+    responses: dict = {}
+    if plan.values:
+        responses["values"] = client.write(sid, plan.values)
+    if plan.clears:
+        responses["clears"] = client.clear(sid, plan.clears)
+    if plan.requests:
+        responses["requests"] = client.meta_write(sid, plan.requests)
+    if args.format == "json":
+        _print_json(responses)
 
 
 # --------------------------------- auth -----------------------------------
@@ -258,6 +297,10 @@ def main():
         p.add_argument("--format", choices=["text", "json"], default="text",
                        help="output format (default: text where applicable)")
 
+    def add_file(p):
+        p.add_argument("--file", "-f", default=None, metavar="PATH",
+                       help="read the payload from PATH ('-' for stdin) instead of stdin")
+
     p_get = sub.add_parser("get", help="read cells / metadata / drive listing")
     p_get.add_argument("target", nargs="?", default="",
                        help="target string; omit for Drive-level listing")
@@ -274,6 +317,7 @@ def main():
     p_put.add_argument("value", nargs="?", default=None,
                        help="optional scalar value; omit to read stdin")
     add_format(p_put)
+    add_file(p_put)
     p_put.set_defaults(func=cmd_put)
 
     p_del = sub.add_parser("del", help="clear or delete target")
@@ -286,6 +330,7 @@ def main():
                        help="title or target string; omit for untitled spreadsheet")
     p_new.add_argument("--side", choices=["above", "below", "left", "right"],
                        default=None, help="for row/column targets")
+    add_file(p_new)
     p_new.set_defaults(func=cmd_new)
 
     p_copy = sub.add_parser("copy", help="copy source to dest (server-side when possible)")
@@ -299,6 +344,12 @@ def main():
     p_move.add_argument("dest", help="destination target (components inherit from source)")
     add_format(p_move)
     p_move.set_defaults(func=cmd_move)
+
+    p_batch = sub.add_parser("batch", help="apply a JSON list of operations in one call")
+    p_batch.add_argument("spreadsheet_id", help="spreadsheet ID")
+    add_file(p_batch)
+    add_format(p_batch)
+    p_batch.set_defaults(func=cmd_batch)
 
     p_auth = sub.add_parser("auth", help="run OAuth flow and cache token")
     p_auth.set_defaults(func=cmd_auth)

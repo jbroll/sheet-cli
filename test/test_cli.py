@@ -6,6 +6,7 @@ and that stdout/stderr output matches the documented rules.
 """
 
 import io
+import json
 import os
 import sys
 from unittest.mock import MagicMock, patch
@@ -256,6 +257,74 @@ class TestCliErrors:
         # argparse exits with code 2 for unknown subcommand
         _, _, code = run_cli(["frobnicate"], fake_client)
         assert code == 2
+
+
+# ============================== --file ====================================
+def test_put_reads_payload_from_file(fake_client, tmp_path):
+    f = tmp_path / "cells.json"
+    f.write_text('{"A1": "hi", "B1": 42}')
+    out, err, code = run_cli(["put", "SID:Sheet1", "--file", str(f)], fake_client)
+    assert code is None
+    fake_client.write.assert_called_once()
+    ops = fake_client.write.call_args[0][1]
+    assert {"range": "Sheet1!A1", "values": [["hi"]]} in ops
+
+
+def test_put_missing_file_is_grammar_error(fake_client):
+    out, err, code = run_cli(["put", "SID:Sheet1", "--file", "/no/such/file"], fake_client)
+    assert code == 2
+    assert "not a readable file" in err
+
+
+def test_put_scalar_and_file_conflict(fake_client, tmp_path):
+    f = tmp_path / "x.json"
+    f.write_text("{}")
+    out, err, code = run_cli(["put", "SID:Sheet1!A1", "hi", "--file", str(f)], fake_client)
+    assert code == 2
+    assert "cannot combine" in err
+
+
+# ============================== batch =====================================
+def test_batch_applies_values_and_requests(fake_client, tmp_path):
+    ops = [
+        {"range": "Sheet1!A1", "values": [["hi"]]},
+        {"range": "Sheet1!A1", "format": {"textFormat": {"bold": True}}},
+        {"column": "Sheet1!A", "width": 100},
+    ]
+    f = tmp_path / "ops.json"
+    f.write_text(json.dumps(ops))
+    out, err, code = run_cli(["batch", "SID", "--file", str(f)], fake_client)
+    assert code is None
+    fake_client.write.assert_called_once()
+    fake_client.meta_write.assert_called_once()
+    reqs = fake_client.meta_write.call_args[0][1]
+    assert reqs[0]["repeatCell"]["range"]["sheetId"] == 0
+    assert reqs[1]["updateDimensionProperties"]["properties"]["pixelSize"] == 100
+
+
+def test_batch_clear_calls_clear(fake_client, tmp_path):
+    f = tmp_path / "ops.json"
+    f.write_text(json.dumps([{"range": "Sheet1!A1:Z9", "clear": True}]))
+    out, err, code = run_cli(["batch", "SID", "--file", str(f)], fake_client)
+    assert code is None
+    fake_client.clear.assert_called_once()
+    assert fake_client.clear.call_args[0][1] == ["Sheet1!A1:Z9"]
+
+
+def test_batch_json_echo(fake_client, tmp_path):
+    f = tmp_path / "ops.json"
+    f.write_text(json.dumps([{"range": "Sheet1!A1", "values": [["x"]]}]))
+    out, err, code = run_cli(["batch", "SID", "--file", str(f), "--format", "json"], fake_client)
+    assert code is None
+    assert '"values"' in out
+
+
+def test_batch_invalid_json_is_grammar_error(fake_client, tmp_path):
+    f = tmp_path / "ops.json"
+    f.write_text("{not json")
+    out, err, code = run_cli(["batch", "SID", "--file", str(f)], fake_client)
+    assert code == 2
+    assert "invalid JSON" in err
 
 
 if __name__ == "__main__":
