@@ -531,9 +531,11 @@ sheet-cli/
 │   │   └── __init__.py       # Package exports
 │   ├── sheet_cli/            # CLI layer
 │   │   ├── multicall.py      # Multi-call launcher (dispatch on argv[0])
-│   │   ├── cli.py            # Six-verb argparse entry point
+│   │   ├── cli.py            # argparse entry point (six verbs + batch)
 │   │   ├── grammar.py        # Target-string grammar (parse/resolve/classify)
 │   │   ├── properties.py     # Property handler registry (.format, .freeze, …)
+│   │   ├── builders.py       # Pure batchUpdate request builders (shared)
+│   │   ├── batch.py          # batch verb core (ops list → values + requests)
 │   │   ├── verbs.py          # get / put / del / new dispatch
 │   │   ├── dispatch.py       # copy / move with server-side optimizations
 │   │   ├── formats.py        # stdin/stdout formatters

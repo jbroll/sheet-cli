@@ -51,6 +51,8 @@ sheet-cli/
 │   │   ├── verbs.py      # get / put / del / new
 │   │   ├── dispatch.py   # copy / move with server-side optimizations
 │   │   ├── properties.py # property handlers (.format, .freeze, .named, …)
+│   │   ├── builders.py   # pure batchUpdate request builders (shared with batch)
+│   │   ├── batch.py      # batch verb core (ops list → values + requests)
 │   │   └── formats.py    # stdin/stdout formatters
 │   └── drive_cli/        # Drive-native CLI (IDs, not the target grammar)
 │       ├── cli.py        # argparse entry point
