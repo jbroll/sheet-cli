@@ -21,6 +21,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from sheet_client import CellData, SheetsClient
 from sheet_client.utils import a1_to_grid_range, column_to_index
 
+from . import builders
 from .grammar import (
     GrammarError,
     Target,
@@ -175,30 +176,12 @@ def _cells_from_sheet_block(sheet_block: Dict[str, Any]) -> List[List[Dict[str, 
 
 
 # ----------- fields helper (for repeatCell / updateSheetProperties) ---------
+# Shared with the batch verb; see builders.py. Aliases kept for callers that
+# reach for the historical private names.
 
 
-def _fields_path(d: Dict[str, Any], prefix: str = "") -> List[str]:
-    """Walk ``d`` to leaves and return dotted field paths.
-
-    ``{"textFormat": {"bold": True}, "backgroundColor": {"red": 1.0}}`` →
-    ``["userEnteredFormat.textFormat.bold", "userEnteredFormat.backgroundColor.red"]``
-    when called with ``prefix="userEnteredFormat."``. A non-dict leaf (including
-    an empty dict) terminates the walk — an empty dict becomes a "replace this
-    whole subtree" field mask, matching Sheets API semantics for clearing.
-    """
-    paths: List[str] = []
-    for k, v in d.items():
-        path = f"{prefix}{k}"
-        if isinstance(v, dict) and v:
-            paths.extend(_fields_path(v, prefix=f"{path}."))
-        else:
-            paths.append(path)
-    return paths
-
-
-def _fields_mask(d: Dict[str, Any], prefix: str = "") -> str:
-    """Join the leaf paths into a comma-separated fields mask."""
-    return ",".join(_fields_path(d, prefix=prefix))
+_fields_path = builders.fields_path
+_fields_mask = builders.fields_mask
 
 
 # ----------- color parsing -----------
@@ -262,14 +245,10 @@ def _format_get(client, target, _data):
 def _format_put(client, target, data):
     if not isinstance(data, dict):
         raise GrammarError("put .format requires a JSON object of format fields")
-    gr = _grid_range(client, target)
-    return client.meta_write(target.spreadsheet_id, [{
-        "repeatCell": {
-            "range": gr,
-            "cell": {"userEnteredFormat": data},
-            "fields": _fields_mask(data, prefix="userEnteredFormat."),
-        }
-    }])
+    return client.meta_write(
+        target.spreadsheet_id,
+        [builders.format_request(_grid_range(client, target), data)],
+    )
 
 
 def _format_del(client, target, _data):
@@ -292,9 +271,10 @@ def _borders_put(client, target, data):
             "put .borders requires a JSON object with top/bottom/left/right/"
             "innerHorizontal/innerVertical keys"
         )
-    gr = _grid_range(client, target)
-    body = {"range": gr, **data}
-    return client.meta_write(target.spreadsheet_id, [{"updateBorders": body}])
+    return client.meta_write(
+        target.spreadsheet_id,
+        [builders.borders_request(_grid_range(client, target), data)],
+    )
 
 
 def _borders_del(client, target, _data):
@@ -350,11 +330,11 @@ def _ranges_overlap(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
 
 
 def _merge_new(client, target, data):
-    gr = _grid_range(client, target)
     merge_type = (data or "MERGE_ALL") if isinstance(data, str) else "MERGE_ALL"
-    return client.meta_write(target.spreadsheet_id, [{
-        "mergeCells": {"range": gr, "mergeType": merge_type}
-    }])
+    return client.meta_write(
+        target.spreadsheet_id,
+        [builders.merge_request(_grid_range(client, target), merge_type)],
+    )
 
 
 def _merge_del(client, target, _data):
@@ -378,14 +358,10 @@ def _note_get(client, target, _data):
 
 def _note_put(client, target, data):
     text = data if isinstance(data, str) else str(data)
-    gr = _grid_range(client, target)
-    return client.meta_write(target.spreadsheet_id, [{
-        "repeatCell": {
-            "range": gr,
-            "cell": {"note": text},
-            "fields": "note",
-        }
-    }])
+    return client.meta_write(
+        target.spreadsheet_id,
+        [builders.note_request(_grid_range(client, target), text)],
+    )
 
 
 def _note_del(client, target, _data):
@@ -404,10 +380,10 @@ def _validation_get(client, target, _data):
 def _validation_put(client, target, data):
     if not isinstance(data, dict):
         raise GrammarError("put .validation requires a JSON object (DataValidationRule)")
-    gr = _grid_range(client, target)
-    return client.meta_write(target.spreadsheet_id, [{
-        "setDataValidation": {"range": gr, "rule": data}
-    }])
+    return client.meta_write(
+        target.spreadsheet_id,
+        [builders.validation_request(_grid_range(client, target), data)],
+    )
 
 
 def _validation_del(client, target, _data):
@@ -931,15 +907,11 @@ def _dim_size_get(dimension: str) -> Handler:
 
 def _dim_size_put(dimension: str) -> Handler:
     def _put(client, target, data):
-        pixels = int(data)
         dr = _dimension_range(client, target, dimension)
-        return client.meta_write(target.spreadsheet_id, [{
-            "updateDimensionProperties": {
-                "range": dr,
-                "properties": {"pixelSize": pixels},
-                "fields": "pixelSize",
-            }
-        }])
+        return client.meta_write(
+            target.spreadsheet_id,
+            [builders.dimension_request(dr, int(data))],
+        )
     return _put
 
 
