@@ -1,7 +1,7 @@
 # sheet-cli
 
-> Google Sheets / Drive CLI. Six verbs (`get put del new copy move`) over a
-> unified `SID:Sheet!locator` target grammar.
+> Google Sheets / Drive CLI. Six verbs (`get put del new copy move`) plus
+> `batch`, over a unified `SID:Sheet!locator` target grammar.
 
 ## Quick reference
 
@@ -12,6 +12,7 @@ sheet-cli del    TARGET            clear range / delete sheet / row / col / spre
 sheet-cli new    [TARGET]          create spreadsheet / sheet / row / column
 sheet-cli copy   SOURCE DEST       copy (server-side when possible)
 sheet-cli move   SOURCE DEST       move (server-side when possible)
+sheet-cli batch  SID --file ops.json   apply a list of operations in one call
 sheet-cli auth                     run OAuth flow (cache token)
 ```
 
@@ -89,9 +90,13 @@ inside that folder. It is an error with any target.
 Exit codes: `0` success, `1` API/auth error, `2` grammar error.
 429 / 500 / 503 responses retry automatically (exponential backoff, 3 attempts).
 
-## Input formats (stdin for `put`)
+## Input formats (`put`, `new`, `batch`)
 
-Auto-detected:
+By default the payload comes from stdin. `--file PATH` reads it from a file
+instead — write the JSON with the editor tool and pass the path, so there is no
+heredoc and no generator script. `--file -` means stdin.
+
+Auto-detected by `put` / `new`:
 
 **JSON** — cell-keyed OR range-keyed:
 ```json
@@ -107,7 +112,7 @@ A3 =SUM(A1:A2)
 ```
 
 Cell keys without `!` are qualified with the target's sheet. Keys with `!`
-pass through unchanged.
+pass through unchanged. `batch` requires JSON.
 
 ## Examples
 
@@ -195,28 +200,27 @@ sheet-cli del SID.parents.FOLDER_ID               # remove a specific folder
 
 ## Bulk writes — recommended pattern for agents
 
-For 10+ cells, generate a JSON object with cell-keyed formulas/values and
-pipe to a single `put`. One HTTP round-trip regardless of cell count.
-
-Write a script (avoids shell-heredoc approval prompts):
-
-```python
-# /tmp/gen.py
-import json
-data = {}
-for row in range(10, 47):
-    data[f"A{row}"] = f"=SUM(B{row}:D{row})"
-    data[f"E{row}"] = f"=A{row}*0.027"
-print(json.dumps(data, indent=2))
-```
-
-Then:
+Write the payload to a file with the editor tool and pass `--file`. Never use
+`echo`/heredoc, and never write a generator script.
 
 ```bash
-python3 /tmp/gen.py | venv/bin/sheet-cli put SID:Sheet1
+sheet-cli put SID:Sheet1 --file cells.json       # cell-keyed, relative to the sheet
+sheet-cli batch SID --file ops.json              # values + formatting + structure
 ```
 
-Scales to thousands of cells in a single call.
+`cells.json` is cell- or range-keyed (see Input formats above). `ops.json` is a
+list of operations, each naming a sheet and a range (or a `row` / `column`) with
+one or more actions — `values`, `clear`, `format`, `borders`, `note`, `merge`,
+`validation`, `width`, `height`:
+
+```json
+[{"range": "Sheet1!B6:B10",
+  "format": {"numberFormat": {"type": "CURRENCY", "pattern": "$#,##0"}}},
+ {"column": "Sheet1!A", "width": 220}]
+```
+
+`batch` issues one values call and one batchUpdate call at most, so a whole
+sheet-build is two round-trips.
 
 ## Authentication
 

@@ -64,15 +64,16 @@ Browser opens for user authorization. Token cached to `~/.sheet-cli/token.json` 
 
 ## CLI Usage
 
-The CLI exposes six verbs over a unified target grammar:
+The CLI exposes six verbs plus `batch` over a unified target grammar:
 
 ```
 sheet-cli get    TARGET            read cell / range / sheet / spreadsheet / drive
-sheet-cli put    TARGET [VALUE]    write cells (scalar sugar or stdin)
+sheet-cli put    TARGET [VALUE]    write cells (scalar sugar, stdin, or --file)
 sheet-cli del    TARGET            clear range / delete sheet / row / col / spreadsheet
 sheet-cli new    [TARGET]          create spreadsheet / sheet / row / col
 sheet-cli copy   SOURCE DEST       copy (server-side when possible)
 sheet-cli move   SOURCE DEST       move (server-side when possible)
+sheet-cli batch  SID --file ops.json   apply a list of operations in one call
 sheet-cli auth                     run OAuth flow
 ```
 
@@ -100,7 +101,7 @@ Sheet!A1                  inherit SID, use Sheet + A1
 ### Properties (`.property` suffix)
 
 Any target may carry a trailing `.property` to address formatting,
-structure, or metadata of the resource. The same six verbs apply:
+structure, or metadata of the resource. The same verbs apply:
 
 ```
 SID.title                  spreadsheet title
@@ -142,8 +143,8 @@ SID:Sheet!C.autofit        auto-resize column (put only)
 `copy` and `move` do not accept `.property` targets. Scalar sugar works
 for simple properties (`put .freeze "2 1"`, `put .color "#ff00aa"`,
 `put .title "New"`, `put .parents FOLDER_ID`); structured request bodies
-come from stdin as JSON. `.parents` is the only property that routes
-through the Drive API (everything else is pure Sheets API).
+come from stdin or `--file PATH` as JSON. `.parents` is the only property that
+routes through the Drive API (everything else is pure Sheets API).
 
 ### Examples
 
@@ -166,6 +167,12 @@ sheet-cli put SID:Sheet1!A1 "hello world"
 
 # Batch write from stdin (JSON or cell-value text — auto-detected)
 echo '{"A1": "hello", "B1": 42}' | sheet-cli put SID:Sheet1
+
+# Bulk write from a file (no heredoc, no generator script)
+sheet-cli put SID:Sheet1 --file cells.json
+
+# A whole sheet-build — values, formatting, structure — in one command
+sheet-cli batch SID --file ops.json
 
 # Clear a range / delete a row / delete a sheet
 sheet-cli del SID:Sheet1!A1:C10

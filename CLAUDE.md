@@ -44,7 +44,7 @@ sheet-cli/
 │   │   ├── auth.py       # OAuth flow
 │   │   ├── utils.py      # A1/grid utilities
 │   │   └── exceptions.py # Custom exceptions
-│   ├── sheet_cli/        # Unified six-verb CLI
+│   ├── sheet_cli/        # Unified verb CLI
 │   │   ├── multicall.py  # multi-call launcher (dispatch on argv[0])
 │   │   ├── cli.py        # argparse entry point
 │   │   ├── grammar.py    # target-string grammar (parse/resolve/classify)
@@ -67,7 +67,7 @@ sheet-cli/
 
 ## CLI Grammar (v2)
 
-Six verbs over one target-string grammar:
+Verbs over one target-string grammar (the six original verbs plus `batch`):
 
 ```
 get    TARGET            read cell / range / sheet / spreadsheet / drive
@@ -76,6 +76,7 @@ del    TARGET            clear range / delete sheet / row / col / spreadsheet
 new    [TARGET]          create spreadsheet / sheet / row / col
 copy   SOURCE DEST       copy (server-side when possible)
 move   SOURCE DEST       move (server-side when possible)
+batch  SID --file ops.json  apply a JSON list of operations in one call
 ```
 
 Target syntax: `SID:Sheet!locator`. Second-operand parts can be omitted to
@@ -88,7 +89,7 @@ for cell reads; the default `formula` shows formulas, the others computed values
 ### Properties — `TARGET.property`
 
 Any target may carry a `.property` suffix to address formatting, structure,
-or metadata of the resource. The same six verbs apply; property responses
+or metadata of the resource. The same verbs apply; property responses
 are always JSON. Collection elements are addressed by name (`named.NAME`)
 or index (`conditional[0]`).
 
@@ -196,32 +197,48 @@ When user requests complex operations:
 2. Append if data exists, write if empty
 3. No magic - explicit decisions
 
-**Bulk cell operations with Python generation:**
-When writing many cells (hundreds or thousands), generate JSON data with Python and
-pipe to `sheet-cli put SID:Sheet`. Keys in the JSON are A1 addresses relative to the
-target sheet (no `Sheet1!` prefix needed — it's inherited from the target).
+**Bulk writes with `--file`:**
+
+Pass a JSON payload from a file instead of stdin — no heredoc, no generator
+script. Write the file with the Write tool, then:
 
 ```bash
-# Use Write tool to create /tmp/gen.py, then execute:
-python3 /tmp/gen.py | venv/bin/sheet-cli put SPREADSHEET_ID:Sheet1
+sheet-cli put SPREADSHEET_ID:Sheet1 --file cells.json
 ```
 
-`/tmp/gen.py`:
-```python
-import json
-data = {}
-for row in range(10, 47):
-    data[f"A{row}"] = f"=SUM(B{row}:D{row})"
-    data[f"E{row}"] = f"=A{row}*0.027"
-print(json.dumps(data, indent=2))
+Keys are A1 addresses relative to the target sheet (no `Sheet1!` prefix —
+it's inherited from the target):
+
+```json
+{"A1": "Name", "B1": 42, "C1": "=A1&B1"}
 ```
 
-This scales from dozens to thousands of cells in a single API call. Use it for:
-- Creating new sheets with structured data
-- Applying formulas to many rows
-- Any operation on 10+ cells
+`--file -` reads stdin explicitly, so the same flag works whether the payload
+is on disk or piped. `put`, `new`, and `batch` all accept it.
 
-Prefer the Write tool for generating the script (avoids heredoc approval prompts).
+**Building a sheet with `batch`:**
+
+One file, one command, values + formatting + structure:
+
+```bash
+sheet-cli batch SPREADSHEET_ID --file ops.json
+```
+
+`ops.json` is a list of operations. Each names a sheet and a range (or a row /
+column) and carries one or more actions:
+
+```json
+[
+  {"range": "Sheet1!A1:D35", "values": [["Total", "", "=B10", ""]]},
+  {"range": "Sheet1!B6:B10", "format": {"numberFormat": {"type": "CURRENCY", "pattern": "\"$\"#,##0"}}},
+  {"column": "Sheet1!A", "width": 220}
+]
+```
+
+Actions: `values`, `clear`, `format`, `borders`, `note`, `merge`, `validation`,
+`width`, `height`. An op may carry several at once. Value writes go to
+`values.batchUpdate`, clears to `values.batchClear`, and the rest to
+`spreadsheets.batchUpdate` — three calls at most, not atomic across them.
 
 ## Implementation Notes
 
